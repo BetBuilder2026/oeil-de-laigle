@@ -9,6 +9,15 @@ st.set_page_config(page_title="Œil de l'Aigle 🦅", page_icon="🦅", layout="
 st.title("🦅 L'Œil de l'Aigle")
 st.caption("Analyse sportive basée sur données réelles + calcul d'EV+")
 
+st.markdown("""
+<style>
+h1 { font-size: 26px !important; }
+h2 { font-size: 20px !important; }
+h3 { font-size: 18px !important; }
+p, li, div { font-size: 16px !important; }
+</style>
+""", unsafe_allow_html=True)
+
 genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 FOOTBALL_HEADERS = {"X-Auth-Token": st.secrets["FOOTBALL_API_KEY"]}
 BASKET_HEADERS = {"Authorization": st.secrets["BASKETBALL_API_KEY"]}
@@ -118,6 +127,7 @@ def get_basketball_form(team_id):
     results = []
     try:
         r = requests.get(url, headers=BASKET_HEADERS, params=params, timeout=10)
+        time.sleep(12)
         if r.status_code == 200:
             games = sorted(r.json().get("data", []), key=lambda x: x["date"], reverse=True)
             for g in games:
@@ -153,7 +163,9 @@ def build_context_blocks(matches, sport, standings_cache):
     return contexts, labels
 
 # ================= PROMPTS & MODELES =================
-PROMPT_RANKING = """
+NO_MARKDOWN_RULE = "IMPORTANT : N'utilise JAMAIS de titres Markdown (pas de #, ##, ### ou ===). Utilise uniquement des emojis et du **gras** pour structurer le texte.\n"
+
+PROMPT_RANKING = NO_MARKDOWN_RULE + """
 Tu es ŒIL DE L'AIGLE. On te fournit plusieurs matchs réels avec données (classement, forme).
 Classe-les du PLUS prévisible au MOINS prévisible selon l'écart de niveau/régularité.
 Donne une courte phrase par match puis termine OBLIGATOIREMENT par :
@@ -163,27 +175,26 @@ MID|SCORE_CONFIANCE
 Rien après.
 """
 
-PROMPT_MARKETS = """
+PROMPT_MARKETS = NO_MARKDOWN_RULE + """
 Tu es ŒIL DE L'AIGLE. Pour chaque match fourni (données réelles + infos complémentaires éventuelles), propose EXACTEMENT 3 options de marché parmi :
 FOOTBALL: 1X2, Double Chance, BTTS, Over/Under buts (1.5/2.5/3.5), Total individuel équipe, Handicap asiatique simple.
 BASKETBALL: Victoire, Handicap/Spread, Over/Under points total, Total individuel équipe.
 Interdiction d'autres marchés (pas de corners/cartons/tirs cadrés).
 Donne une probabilité réaliste (0-1) par option.
 Format par match :
----
 🎯 [MID] NOM DU MATCH
 📊 Résumé des données prises en compte
 🅰️ Option A : ... — Confiance : XX%
 🅱️ Option B : ... — Confiance : XX%
 🅲️ Option C : ... — Confiance : XX%
----
+
 Puis termine OBLIGATOIREMENT par :
 ###DATA_BLOCK###
 MID|LETTRE|MARCHE|PROBA
 Rien après.
 """
 
-PROMPT_EXTRA = """
+PROMPT_EXTRA = NO_MARKDOWN_RULE + """
 Tu es ŒIL DE L'AIGLE. On te donne les données d'un match + une liste de marchés additionnels trouvés par l'utilisateur chez son bookmaker.
 Pour CHAQUE marché, donne une probabilité réaliste (0-1) basée sur les données.
 Réponds UNIQUEMENT par :
@@ -193,9 +204,16 @@ NUMERO|PROBA
 Rien d'autre.
 """
 
+PROMPT_JUSTIFY = NO_MARKDOWN_RULE + """
+Tu es ŒIL DE L'AIGLE. On te donne les données réelles d'un match, ainsi que TOUTES les options de marché évaluées (avec leur probabilité estimée, la cote réelle fournie par l'utilisateur, et leur EV calculé), plus l'option FINALEMENT retenue.
+Rédige une justification courte (3-4 phrases MAX) expliquant pourquoi l'option retenue est la meilleure par rapport aux AUTRES options proposées (compare les probabilités, les cotes et l'EV des autres pour montrer pourquoi elles étaient moins intéressantes).
+Ne mets aucun titre, juste le texte direct de la justification.
+"""
+
 model_ranking = genai.GenerativeModel(model_name="gemini-flash-lite-latest", system_instruction=PROMPT_RANKING)
 model_markets = genai.GenerativeModel(model_name="gemini-flash-lite-latest", system_instruction=PROMPT_MARKETS)
 model_extra = genai.GenerativeModel(model_name="gemini-flash-lite-latest", system_instruction=PROMPT_EXTRA)
+model_justify = genai.GenerativeModel(model_name="gemini-flash-lite-latest", system_instruction=PROMPT_JUSTIFY)
 
 def rank_matches(contexts):
     resp = model_ranking.generate_content("\n".join(contexts.values()))
@@ -239,6 +257,14 @@ def get_extra_probabilities(context_text, market_names):
                 except: pass
     return probs
 
+def get_justification(context_text, all_results, best):
+    others = [r for r in all_results if r is not best]
+    others_txt = "\n".join([f"- {o['market']} : proba {round(o['proba']*100)}%, cote {o['cote']}, EV {round(o['ev'],2)}" for o in others])
+    best_txt = f"{best['market']} : proba {round(best['proba']*100)}%, cote {best['cote']}, EV {round(best['ev'],2)}"
+    prompt = f"{context_text}\n\nOption retenue :\n{best_txt}\n\nAutres options évaluées :\n{others_txt if others_txt else 'Aucune autre option fournie'}"
+    resp = model_justify.generate_content(prompt)
+    return resp.text.strip()
+
 def parse_odds_line(line):
     line = line.strip()
     if not line: return None
@@ -273,8 +299,9 @@ def evaluate_match_options(mid, options_data, odds_main, extra_pairs, context_te
                 ev = compute_ev(p, float(cote))
                 results.append({"market": name, "proba": p, "cote": float(cote), "ev": ev})
     if not results:
-        return None
-    return max(results, key=lambda r: r["ev"])
+        return None, []
+    best = max(results, key=lambda r: r["ev"])
+    return best, results
 
 # ================= ETAT INITIAL =================
 if "stage" not in st.session_state:
@@ -361,17 +388,18 @@ if st.session_state.stage == "options_ready":
     st.info("Format attendu :\nM1: A=1.85 B=1.70 C=1.90 EXTRA: Over1.5=1.25,Over3.5=2.80\n(EXTRA optionnel, une ligne par match affiché ci-dessus)")
     odds_input = st.text_area("💬 Cotes réelles trouvées chez votre bookmaker")
     if st.button("✅ Calculer l'EV+ et valider"):
-        with st.spinner("🦅 Calcul des valeurs espérées..."):
+        with st.spinner("🦅 Calcul des valeurs espérées et justification..."):
             for line in odds_input.strip().split("\n"):
                 parsed = parse_odds_line(line)
                 if not parsed: continue
                 mid, main_odds, extra_pairs = parsed
                 if mid not in st.session_state.active: continue
-                best = evaluate_match_options(mid, st.session_state.options_data, main_odds, extra_pairs, st.session_state.match_contexts[mid])
+                best, all_results = evaluate_match_options(mid, st.session_state.options_data, main_odds, extra_pairs, st.session_state.match_contexts[mid])
                 if best is None: continue
                 st.session_state.active.remove(mid)
                 if best["ev"] > 0:
-                    st.session_state.validated[mid] = {**best, "label": st.session_state.match_labels[mid]}
+                    justification = get_justification(st.session_state.match_contexts[mid], all_results, best)
+                    st.session_state.validated[mid] = {**best, "label": st.session_state.match_labels[mid], "justification": justification}
                 else:
                     st.session_state.rejected.add(mid)
 
@@ -413,12 +441,13 @@ if st.session_state.stage == "final":
             if not final_combo and vals:
                 final_combo = [vals[0]]
 
-        st.markdown("## 🎫 COUPON FINAL (EV+ validé)")
+        st.markdown("**🎫 COUPON FINAL (EV+ validé)**")
         total_odds = 1.0
         for s in final_combo:
             total_odds *= s["cote"]
             st.markdown(f"**{s['label']}** → {s['market']} | Cote: {s['cote']} | Proba: {round(s['proba']*100)}% | EV: {round(s['ev'],2)} ✅")
-        st.markdown(f"### 🎯 Cote totale : **{round(total_odds,2)}** (objectif : {st.session_state.cote_cible})")
+            st.caption(f"💡 Pourquoi ce choix : {s.get('justification', 'N/A')}")
+        st.markdown(f"**🎯 Cote totale : {round(total_odds,2)} (objectif : {st.session_state.cote_cible})**")
         st.warning("⚠️ Vérifiez ces cotes chez votre bookmaker avant de valider définitivement.")
 
     if st.button("🔄 Nouvelle analyse"):
