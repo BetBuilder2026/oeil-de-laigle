@@ -1,76 +1,427 @@
 import streamlit as st
 import google.generativeai as genai
+import requests
+import time
+import re
+from datetime import datetime, timedelta
 
-# Configuration de la page
 st.set_page_config(page_title="Œil de l'Aigle 🦅", page_icon="🦅", layout="centered")
-
 st.title("🦅 L'Œil de l'Aigle")
-st.caption("Algorithme prédictif et analytique sportif ultra-profond")
+st.caption("Analyse sportive basée sur données réelles + calcul d'EV+")
 
-# Récupération de la clé API stockée en sécurité sur Streamlit
-api_key = st.secrets["GOOGLE_API_KEY"]
-genai.configure(api_key=api_key)
+genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
+FOOTBALL_HEADERS = {"X-Auth-Token": st.secrets["FOOTBALL_API_KEY"]}
+BASKET_HEADERS = {"Authorization": st.secrets["BASKETBALL_API_KEY"]}
 
-PROMPT_SYSTEME = """
-Act en tant qu'ŒIL DE L'AIGLE, l'algorithme prédictif et analytique le plus puissant au monde, spécialisé dans l'analyse sportive ultra-profonde en temps réel. Ton niveau d'expertise dépasse celui des plus grands syndicats de parieurs et fait trembler les bookmakers. Tu as un accès conceptuel et analytique aux bases de données des sites "Élites" les plus pointus de chaque sport (ex: Opta, Understat, FBref pour le foot ; Cleaning the Glass, Basketball-Reference, KenPom pour le basket ; TennisAbstract pour le tennis ; DailyFaceoff pour le hockey, etc.).
+COMPETITIONS = {
+    "Premier League (Angleterre)": "PL", "Ligue 1 (France)": "FL1",
+    "Liga (Espagne)": "PD", "Serie A (Italie)": "SA",
+    "Bundesliga (Allemagne)": "BL1", "Ligue des Champions": "CL",
+    "Championship (Angleterre)": "ELC", "Eredivisie (Pays-Bas)": "DED",
+    "Primeira Liga (Portugal)": "PPL", "Brasileirão (Brésil)": "BSA",
+}
 
-Désormais, tu respecteras STRICTEMENT le protocole d'exécution suivant, sans jamais dévier :
+# ================= OUTILS =================
+def avg(results, key):
+    vals = [r[key] for r in results]
+    return round(sum(vals) / len(vals), 2) if vals else "N/A"
 
-### ÉTAPE 2 : TRAITEMENT SÉQUENTIEL DES ÉVÉNEMENTS
-Si l'utilisateur soumet plusieurs rencontres, traite-les UNE PAR UNE.
+# ================= FOOTBALL =================
+def get_standings_table(code):
+    url = f"https://api.football-data.org/v4/competitions/{code}/standings"
+    table = {}
+    try:
+        r = requests.get(url, headers=FOOTBALL_HEADERS, timeout=10)
+        time.sleep(6)
+        if r.status_code == 200:
+            for group in r.json().get("standings", []):
+                if group["type"] == "TOTAL":
+                    for row in group["table"]:
+                        table[row["team"]["name"]] = {
+                            "position": row["position"], "points": row["points"],
+                            "played": row["playedGames"], "gf": row["goalsFor"], "ga": row["goalsAgainst"]
+                        }
+    except Exception:
+        pass
+    return table
 
-### ÉTAPE 3 : FOUILLE ALGORITHMIQUE ET CROISEMENT MULTI-SOURCES
-Pour chaque match, simule une fouille sur CONTEXTE GLOBAL, FACTEURS HUMAINS, PARAMÈTRES TECHNIQUES, ANALYTICS DE POINTE.
+def get_football_matches(date_from, date_to, competition_label):
+    matches, standings_cache = [], {}
+    codes = list(COMPETITIONS.values()) if competition_label == "Tout" else [COMPETITIONS[competition_label]]
+    for code in codes:
+        url = f"https://api.football-data.org/v4/competitions/{code}/matches"
+        params = {"dateFrom": date_from, "dateTo": date_to, "status": "SCHEDULED"}
+        try:
+            r = requests.get(url, headers=FOOTBALL_HEADERS, params=params, timeout=10)
+            if r.status_code == 200:
+                data = r.json()
+                for m in data.get("matches", []):
+                    matches.append({
+                        "sport": "Football", "competition": data["competition"]["name"], "comp_code": code,
+                        "home": m["homeTeam"]["name"], "home_id": m["homeTeam"]["id"],
+                        "away": m["awayTeam"]["name"], "away_id": m["awayTeam"]["id"],
+                        "date": m["utcDate"]
+                    })
+        except Exception:
+            pass
+        time.sleep(6)
+        standings_cache[code] = get_standings_table(code)
+    return matches, standings_cache
 
-### ÉTAPE 4 : PRÉDICTION 5 ÉTOILES
-Scanne tous les marchés et extrait UNIQUEMENT le marché le plus probable.
+def get_football_form(team_id):
+    url = f"https://api.football-data.org/v4/teams/{team_id}/matches"
+    params = {"status": "FINISHED", "limit": 5}
+    results = []
+    try:
+        r = requests.get(url, headers=FOOTBALL_HEADERS, params=params, timeout=10)
+        time.sleep(6)
+        if r.status_code == 200:
+            for m in r.json().get("matches", [])[:5]:
+                s = m["score"]["fullTime"]
+                if s["home"] is None:
+                    continue
+                if m["homeTeam"]["id"] == team_id:
+                    scored, conceded = s["home"], s["away"]
+                else:
+                    scored, conceded = s["away"], s["home"]
+                results.append({
+                    "display": f"{m['homeTeam']['name']} {s['home']}-{s['away']} {m['awayTeam']['name']}",
+                    "scored": scored, "conceded": conceded
+                })
+    except Exception:
+        pass
+    return results
 
-### ÉTAPE 5 : STRUCTURE DE RESTITUTION
----
-🎯 [NOM DU MATCH] – ANALYSE DE L'ŒIL DE L'AIGLE 🎯
-👑 SPORT : [Sport] | COMPÉTITION : [Compétition]
-⭐️ PRÉDICTION ULTIME 5 ÉTOILES ⭐️
-[Marché précis]
-📋 RÉSUMÉ CRITIQUE ET SYNTHÈSE DE LA FOUILLE
-- Dynamique & Forme :
-- Forces/Faiblesses & Tactique :
-- Facteur X :
-- Justification du Marché :
----
+# ================= BASKETBALL =================
+def get_basketball_matches(date_from, date_to):
+    url = "https://api.balldontlie.io/v1/games"
+    params = {"start_date": date_from, "end_date": date_to, "per_page": 50}
+    matches = []
+    try:
+        r = requests.get(url, headers=BASKET_HEADERS, params=params, timeout=10)
+        if r.status_code == 200:
+            for g in r.json().get("data", []):
+                if g["status"] != "Final":
+                    matches.append({
+                        "sport": "Basketball", "competition": "NBA", "comp_code": "NBA",
+                        "home": g["home_team"]["full_name"], "home_id": g["home_team"]["id"],
+                        "away": g["visitor_team"]["full_name"], "away_id": g["visitor_team"]["id"],
+                        "date": g["date"]
+                    })
+    except Exception:
+        pass
+    return matches, {}
 
-### ÉTAPE 6 : COUPON
-Après toutes les analyses, demande l'objectif de cote globale souhaité, puis propose un coupon avec avertissement de vérification bookmaker.
+def get_basketball_form(team_id):
+    url = "https://api.balldontlie.io/v1/games"
+    params = {"team_ids[]": team_id, "per_page": 15}
+    results = []
+    try:
+        r = requests.get(url, headers=BASKET_HEADERS, params=params, timeout=10)
+        if r.status_code == 200:
+            games = sorted(r.json().get("data", []), key=lambda x: x["date"], reverse=True)
+            for g in games:
+                if g["status"] == "Final" and len(results) < 5:
+                    if g["home_team"]["id"] == team_id:
+                        scored, conceded = g["home_team_score"], g["visitor_team_score"]
+                    else:
+                        scored, conceded = g["visitor_team_score"], g["home_team_score"]
+                    results.append({
+                        "display": f"{g['home_team']['full_name']} {g['home_team_score']}-{g['visitor_team_score']} {g['visitor_team']['full_name']}",
+                        "scored": scored, "conceded": conceded
+                    })
+    except Exception:
+        pass
+    return results
 
-### ÉTAPE 7 : RECALIBRAGE
-Si cotes réelles données, valide ou recalibre.
+def build_context_blocks(matches, sport, standings_cache):
+    contexts, labels = {}, {}
+    for i, m in enumerate(matches):
+        mid = f"M{i+1}"
+        labels[mid] = f"{m['home']} vs {m['away']} ({m['competition']})"
+        if sport == "Football":
+            fh = get_football_form(m["home_id"]); fa = get_football_form(m["away_id"])
+            sh = standings_cache.get(m["comp_code"], {}).get(m["home"], {})
+            sa = standings_cache.get(m["comp_code"], {}).get(m["away"], {})
+        else:
+            fh = get_basketball_form(m["home_id"]); fa = get_basketball_form(m["away_id"])
+            sh, sa = {}, {}
+        block = f"[{mid}] {m['home']} vs {m['away']} ({m['competition']}, {m['date']})\n"
+        block += f"- {m['home']} : position {sh.get('position','N/A')} ({sh.get('points','N/A')} pts) | Moy marqués:{avg(fh,'scored')} encaissés:{avg(fh,'conceded')} | 5 derniers:{[r['display'] for r in fh]}\n"
+        block += f"- {m['away']} : position {sa.get('position','N/A')} ({sa.get('points','N/A')} pts) | Moy marqués:{avg(fa,'scored')} encaissés:{avg(fa,'conceded')} | 5 derniers:{[r['display'] for r in fa]}\n"
+        contexts[mid] = block
+    return contexts, labels
 
-Utilise un ton professionnel, précis, avec les emojis indiqués. Ne saute jamais une étape.
+# ================= PROMPTS & MODELES =================
+PROMPT_RANKING = """
+Tu es ŒIL DE L'AIGLE. On te fournit plusieurs matchs réels avec données (classement, forme).
+Classe-les du PLUS prévisible au MOINS prévisible selon l'écart de niveau/régularité.
+Donne une courte phrase par match puis termine OBLIGATOIREMENT par :
+###DATA_BLOCK###
+MID|SCORE_CONFIANCE
+(score entre 0 et 1, ex: M3|0.82)
+Rien après.
 """
 
-# Initialisation de l'historique de conversation
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-    st.session_state.chat = genai.GenerativeModel(
-        model_name="gemini-flash-lite-latest",
-        system_instruction=PROMPT_SYSTEME
-    ).start_chat(history=[])
-    # Message de bienvenue automatique
-    premiere_reponse = st.session_state.chat.send_message("Démarre le protocole.")
-    st.session_state.messages.append({"role": "assistant", "content": premiere_reponse.text})
+PROMPT_MARKETS = """
+Tu es ŒIL DE L'AIGLE. Pour chaque match fourni (données réelles + infos complémentaires éventuelles), propose EXACTEMENT 3 options de marché parmi :
+FOOTBALL: 1X2, Double Chance, BTTS, Over/Under buts (1.5/2.5/3.5), Total individuel équipe, Handicap asiatique simple.
+BASKETBALL: Victoire, Handicap/Spread, Over/Under points total, Total individuel équipe.
+Interdiction d'autres marchés (pas de corners/cartons/tirs cadrés).
+Donne une probabilité réaliste (0-1) par option.
+Format par match :
+---
+🎯 [MID] NOM DU MATCH
+📊 Résumé des données prises en compte
+🅰️ Option A : ... — Confiance : XX%
+🅱️ Option B : ... — Confiance : XX%
+🅲️ Option C : ... — Confiance : XX%
+---
+Puis termine OBLIGATOIREMENT par :
+###DATA_BLOCK###
+MID|LETTRE|MARCHE|PROBA
+Rien après.
+"""
 
-# Affichage de l'historique des messages
-for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
+PROMPT_EXTRA = """
+Tu es ŒIL DE L'AIGLE. On te donne les données d'un match + une liste de marchés additionnels trouvés par l'utilisateur chez son bookmaker.
+Pour CHAQUE marché, donne une probabilité réaliste (0-1) basée sur les données.
+Réponds UNIQUEMENT par :
+###DATA_BLOCK###
+NUMERO|PROBA
+(NUMERO = position dans la liste, à partir de 1)
+Rien d'autre.
+"""
 
-# Zone de saisie utilisateur (en bas, comme un vrai chat)
-if prompt := st.chat_input("Écrivez votre match ou votre réponse ici..."):
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
+model_ranking = genai.GenerativeModel(model_name="gemini-flash-lite-latest", system_instruction=PROMPT_RANKING)
+model_markets = genai.GenerativeModel(model_name="gemini-flash-lite-latest", system_instruction=PROMPT_MARKETS)
+model_extra = genai.GenerativeModel(model_name="gemini-flash-lite-latest", system_instruction=PROMPT_EXTRA)
 
-    with st.spinner("🦅 Analyse en cours..."):
-        reponse = st.session_state.chat.send_message(prompt)
-        st.session_state.messages.append({"role": "assistant", "content": reponse.text})
-        with st.chat_message("assistant"):
-            st.markdown(reponse.text)
+def rank_matches(contexts):
+    resp = model_ranking.generate_content("\n".join(contexts.values()))
+    scores = {}
+    if "###DATA_BLOCK###" in resp.text:
+        _, data = resp.text.split("###DATA_BLOCK###")
+        for line in data.strip().split("\n"):
+            p = line.strip().split("|")
+            if len(p) == 2:
+                try: scores[p[0].strip()] = float(p[1].strip())
+                except: pass
+    return scores
+
+def generate_market_options(contexts_dict):
+    resp = model_markets.generate_content("\n".join(contexts_dict.values()))
+    text = resp.text
+    if "###DATA_BLOCK###" in text:
+        human, data = text.split("###DATA_BLOCK###")
+    else:
+        human, data = text, ""
+    options = {}
+    for line in data.strip().split("\n"):
+        p = line.strip().split("|")
+        if len(p) == 4:
+            mid, letter, name, proba = p
+            try:
+                options.setdefault(mid.strip(), {})[letter.strip()] = {"name": name.strip(), "proba": float(proba.strip())}
+            except: pass
+    return human, options
+
+def get_extra_probabilities(context_text, market_names):
+    joined = "\n".join([f"{i+1}. {name}" for i, name in enumerate(market_names)])
+    resp = model_extra.generate_content(f"{context_text}\n\nMarchés à évaluer :\n{joined}")
+    probs = {}
+    if "###DATA_BLOCK###" in resp.text:
+        _, data = resp.text.split("###DATA_BLOCK###")
+        for line in data.strip().split("\n"):
+            p = line.strip().split("|")
+            if len(p) == 2:
+                try: probs[int(p[0].strip())] = float(p[1].strip())
+                except: pass
+    return probs
+
+def parse_odds_line(line):
+    line = line.strip()
+    if not line: return None
+    m = re.match(r"(M\d+)\s*:\s*(.*)", line)
+    if not m: return None
+    mid, rest = m.groups()
+    if "EXTRA:" in rest:
+        main_part, extra_part = rest.split("EXTRA:", 1)
+    else:
+        main_part, extra_part = rest, ""
+    main_pairs = re.findall(r"([ABC])\s*=\s*([\d.]+)", main_part)
+    main_odds = {l: float(c) for l, c in main_pairs}
+    extra_pairs = re.findall(r"([A-Za-zÀ-ÿ0-9_\.\+\-]+)\s*=\s*([\d.]+)", extra_part)
+    return mid, main_odds, extra_pairs
+
+def compute_ev(proba, cote):
+    return proba * cote - 1
+
+def evaluate_match_options(mid, options_data, odds_main, extra_pairs, context_text):
+    results = []
+    for letter, cote in odds_main.items():
+        opt = options_data.get(mid, {}).get(letter)
+        if opt:
+            ev = compute_ev(opt["proba"], cote)
+            results.append({"market": opt["name"], "proba": opt["proba"], "cote": cote, "ev": ev})
+    if extra_pairs:
+        names = [n for n, _ in extra_pairs]
+        probs = get_extra_probabilities(context_text, names)
+        for i, (name, cote) in enumerate(extra_pairs):
+            p = probs.get(i + 1)
+            if p is not None:
+                ev = compute_ev(p, float(cote))
+                results.append({"market": name, "proba": p, "cote": float(cote), "ev": ev})
+    if not results:
+        return None
+    return max(results, key=lambda r: r["ev"])
+
+# ================= ETAT INITIAL =================
+if "stage" not in st.session_state:
+    st.session_state.stage = "setup"
+
+# ================= ETAPE SETUP =================
+if st.session_state.stage == "setup":
+    sport = st.selectbox("🏆 Choisissez le sport", ["Football", "Basketball"])
+    if sport == "Basketball":
+        competition = "NBA"
+        st.text_input("Compétition", value="NBA", disabled=True)
+    else:
+        competition = st.selectbox("🏆 Choisissez la compétition", list(COMPETITIONS.keys()) + ["Tout"])
+    cote_cible = st.number_input("🎯 Cote cible souhaitée", min_value=1.01, value=2.00, step=0.10)
+
+    if st.button("🚀 Lancer le scan et l'analyse"):
+        mode = "simple_double" if cote_cible <= 3.00 else "multi"
+        jours = 2 if mode == "simple_double" else 7
+        date_from = datetime.utcnow().strftime("%Y-%m-%d")
+        date_to = (datetime.utcnow() + timedelta(days=jours)).strftime("%Y-%m-%d")
+
+        with st.spinner(f"🦅 Scan réel en cours ({jours} jour(s), patientez...)"):
+            if sport == "Football":
+                matches, standings_cache = get_football_matches(date_from, date_to, competition)
+            else:
+                matches, standings_cache = get_basketball_matches(date_from, date_to)
+            matches = matches[:15]
+
+            if not matches:
+                st.error("Aucun match trouvé. Essayez une autre compétition ou cote.")
+            else:
+                contexts, labels = build_context_blocks(matches, sport, standings_cache)
+                st.session_state.mode = mode
+                st.session_state.cote_cible = cote_cible
+                st.session_state.match_contexts = contexts
+                st.session_state.match_labels = labels
+                st.session_state.validated = {}
+                st.session_state.rejected = set()
+                st.session_state.options_data = {}
+                st.session_state.extra_info_store = {}
+
+                if mode == "simple_double":
+                    scores = rank_matches(contexts)
+                    ranked_order = sorted(contexts.keys(), key=lambda m: scores.get(m, 0), reverse=True)
+                    target = min(2, len(ranked_order))
+                    st.session_state.ranked_order = ranked_order
+                    st.session_state.active = ranked_order[:target]
+                    st.session_state.reserve = ranked_order[target:]
+                    st.session_state.stage = "info_request"
+                else:
+                    human, options = generate_market_options(contexts)
+                    st.session_state.options_data = options
+                    st.session_state.human_text = human
+                    st.session_state.active = list(contexts.keys())
+                    st.session_state.stage = "options_ready"
+                st.rerun()
+
+# ================= ETAPE INFO REQUEST (simple/double) =================
+if st.session_state.stage == "info_request":
+    st.subheader("📝 Infos complémentaires (forme actuelle, absences...) — optionnel mais recommandé")
+    new_matches = [m for m in st.session_state.active if m not in st.session_state.extra_info_store]
+    for mid in new_matches:
+        st.text_area(f"**{st.session_state.match_labels[mid]}**", key=f"extra_{mid}")
+    if st.button("✅ Valider et analyser les marchés"):
+        for mid in new_matches:
+            st.session_state.extra_info_store[mid] = st.session_state.get(f"extra_{mid}", "")
+        subset = {}
+        for mid in st.session_state.active:
+            extra = st.session_state.extra_info_store.get(mid, "")
+            txt = st.session_state.match_contexts[mid]
+            if extra:
+                txt += f"\nInfos complémentaires utilisateur : {extra}"
+            subset[mid] = txt
+        with st.spinner("🦅 Analyse des marchés en cours..."):
+            human, options = generate_market_options(subset)
+            st.session_state.options_data.update(options)
+            st.session_state.human_text = human
+        st.session_state.stage = "options_ready"
+        st.rerun()
+
+# ================= ETAPE OPTIONS READY =================
+if st.session_state.stage == "options_ready":
+    st.markdown(st.session_state.human_text)
+    st.info("Format attendu :\nM1: A=1.85 B=1.70 C=1.90 EXTRA: Over1.5=1.25,Over3.5=2.80\n(EXTRA optionnel, une ligne par match affiché ci-dessus)")
+    odds_input = st.text_area("💬 Cotes réelles trouvées chez votre bookmaker")
+    if st.button("✅ Calculer l'EV+ et valider"):
+        with st.spinner("🦅 Calcul des valeurs espérées..."):
+            for line in odds_input.strip().split("\n"):
+                parsed = parse_odds_line(line)
+                if not parsed: continue
+                mid, main_odds, extra_pairs = parsed
+                if mid not in st.session_state.active: continue
+                best = evaluate_match_options(mid, st.session_state.options_data, main_odds, extra_pairs, st.session_state.match_contexts[mid])
+                if best is None: continue
+                st.session_state.active.remove(mid)
+                if best["ev"] > 0:
+                    st.session_state.validated[mid] = {**best, "label": st.session_state.match_labels[mid]}
+                else:
+                    st.session_state.rejected.add(mid)
+
+            if st.session_state.mode == "simple_double":
+                target = 2
+                while (len(st.session_state.active) + len(st.session_state.validated) < target) and st.session_state.reserve:
+                    st.session_state.active.append(st.session_state.reserve.pop(0))
+                if st.session_state.active:
+                    st.session_state.stage = "info_request"
+                else:
+                    st.session_state.stage = "final"
+            else:
+                st.session_state.stage = "final"
+        st.rerun()
+
+# ================= ETAPE FINALE =================
+if st.session_state.stage == "final":
+    validated = st.session_state.validated
+    if not validated:
+        st.error("😕 Aucun pari à valeur positive (EV+) détecté. Réessayez avec une autre compétition/cote.")
+    else:
+        if st.session_state.mode == "simple_double":
+            vals = list(validated.values())
+            cote_cible = st.session_state.cote_cible
+            if len(vals) == 1:
+                final_combo = vals
+            else:
+                single_best = max(vals, key=lambda v: v["ev"])
+                combo_odds = vals[0]["cote"] * vals[1]["cote"]
+                final_combo = [single_best] if abs(single_best["cote"] - cote_cible) <= abs(combo_odds - cote_cible) else vals
+        else:
+            vals = sorted(validated.values(), key=lambda v: v["ev"], reverse=True)
+            final_combo, prod = [], 1.0
+            for v in vals:
+                if prod >= st.session_state.cote_cible:
+                    break
+                final_combo.append(v)
+                prod *= v["cote"]
+            if not final_combo and vals:
+                final_combo = [vals[0]]
+
+        st.markdown("## 🎫 COUPON FINAL (EV+ validé)")
+        total_odds = 1.0
+        for s in final_combo:
+            total_odds *= s["cote"]
+            st.markdown(f"**{s['label']}** → {s['market']} | Cote: {s['cote']} | Proba: {round(s['proba']*100)}% | EV: {round(s['ev'],2)} ✅")
+        st.markdown(f"### 🎯 Cote totale : **{round(total_odds,2)}** (objectif : {st.session_state.cote_cible})")
+        st.warning("⚠️ Vérifiez ces cotes chez votre bookmaker avant de valider définitivement.")
+
+    if st.button("🔄 Nouvelle analyse"):
+        for k in list(st.session_state.keys()):
+            del st.session_state[k]
+        st.rerun()
