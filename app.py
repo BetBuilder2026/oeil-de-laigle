@@ -4,6 +4,7 @@ import requests
 import time
 import re
 import math
+import itertools
 from datetime import datetime, timedelta
 
 st.set_page_config(page_title="Œil de l'Aigle 🦅", page_icon="🦅", layout="centered")
@@ -34,16 +35,9 @@ COMPETITIONS = {
     "Primeira Liga (Portugal)": "PPL", "Brasileirão (Brésil)": "BSA",
 }
 
-MAX_MATCHS_TESTES = 5
-
-THRESHOLDS = {
-    "simple_double": 0.70,
-    "combo_info": 0.70,
-    "multi": 0.70,
-}
-
-def get_threshold(mode):
-    return THRESHOLDS.get(mode, 0.70)
+MAX_INFO_MATCHES = 5
+MAX_POOL_SIMPLE_COMBO = 10
+CONFIDENCE_THRESHOLD = 0.70
 
 def avg(results, key):
     vals = [r[key] for r in results]
@@ -321,10 +315,8 @@ def parse_odds_line(line):
 def confidence_label(p):
     if p >= 0.85:
         return "🔥 Très fiable"
-    elif p >= 0.70:
-        return "✅ Fiable"
     else:
-        return "🔸 Fiabilité correcte"
+        return "✅ Fiable"
 
 def evaluate_match_options(mid, options_data, odds_main, extra_pairs, context_text):
     results = []
@@ -344,6 +336,23 @@ def evaluate_match_options(mid, options_data, odds_main, extra_pairs, context_te
     best = max(results, key=lambda r: r["proba"])
     return best, results
 
+def best_subset_matching_target(vals, target, max_size):
+    n = len(vals)
+    if n == 0:
+        return []
+    max_k = min(max_size, n) if max_size else n
+    best_combo, best_diff = None, None
+    for k in range(1, max_k + 1):
+        for combo in itertools.combinations(vals, k):
+            prod = 1.0
+            for c in combo:
+                prod *= c["cote"]
+            diff = abs(prod - target)
+            if best_diff is None or diff < best_diff:
+                best_diff = diff
+                best_combo = combo
+    return list(best_combo) if best_combo else []
+
 if "stage" not in st.session_state:
     st.session_state.stage = "setup"
 
@@ -359,22 +368,24 @@ if st.session_state.stage == "setup":
     if st.button("🚀 Lancer le scan et l'analyse"):
         if cote_cible <= 3.00:
             mode = "simple_double"
-            target_selections = 2
+            coupon_max_size = 2
+            jours, limit = 2, MAX_POOL_SIMPLE_COMBO
         else:
             estimated = max(2, round(math.log(cote_cible) / math.log(1.7)))
             if estimated <= 5:
                 mode = "combo_info"
-                target_selections = estimated
+                coupon_max_size = estimated
+                jours, limit = 7, MAX_POOL_SIMPLE_COMBO
             else:
                 mode = "multi"
-                target_selections = None
+                coupon_max_size = None
+                jours, limit = 7, 15
 
-        jours = 2 if mode == "simple_double" else 7
-        limit = 6 if mode == "simple_double" else 15
         date_from = datetime.utcnow().strftime("%Y-%m-%d")
         date_to = (datetime.utcnow() + timedelta(days=jours)).strftime("%Y-%m-%d")
 
-        with st.spinner(f"🦅 Scan réel en cours ({jours} jour(s), patientez...)"):
+        spinner_msg = f"🦅 Scan réel en cours sur {limit} matchs max ({jours} jour(s)). Cela peut prendre 2 à 5 minutes selon le sport, patientez..."
+        with st.spinner(spinner_msg):
             if sport == "Football":
                 matches, standings_cache = get_football_matches(date_from, date_to, competition)
             else:
@@ -387,24 +398,18 @@ if st.session_state.stage == "setup":
                 contexts, labels = build_context_blocks(matches, sport, standings_cache)
                 st.session_state.mode = mode
                 st.session_state.cote_cible = cote_cible
+                st.session_state.coupon_max_size = coupon_max_size
                 st.session_state.match_contexts = contexts
                 st.session_state.match_labels = labels
                 st.session_state.validated = {}
-                st.session_state.rejected = set()
                 st.session_state.options_data = {}
                 st.session_state.extra_info_store = {}
-                st.session_state.tested_count = 0
-                st.session_state.limit_reached = False
 
                 if mode in ("simple_double", "combo_info"):
                     scores = rank_matches(contexts)
                     ranked_order = sorted(contexts.keys(), key=lambda m: scores.get(m, 0), reverse=True)
-                    target = min(target_selections, len(ranked_order))
-                    st.session_state.target = target
-                    st.session_state.ranked_order = ranked_order
-                    st.session_state.active = ranked_order[:target]
-                    st.session_state.tested_count = len(st.session_state.active)
-                    st.session_state.reserve = ranked_order[target:]
+                    st.session_state.info_pool = ranked_order[:MAX_INFO_MATCHES]
+                    st.session_state.db_pool = ranked_order[MAX_INFO_MATCHES:]
                     st.session_state.stage = "info_request"
                 else:
                     human, options = generate_market_options(contexts)
@@ -415,129 +420,83 @@ if st.session_state.stage == "setup":
                 st.rerun()
 
 if st.session_state.stage == "info_request":
-    threshold_pct = int(get_threshold(st.session_state.mode) * 100)
-    mode_labels = {
-        "simple_double": f"🎫 Mode Simple/Double (objectif : 2 sélections, seuil de fiabilité ≥ {threshold_pct}%)",
-        "combo_info": f"🎫 Mode Combiné avec infos complémentaires (objectif : {st.session_state.get('target','?')} sélections, seuil ≥ {threshold_pct}%, max {MAX_MATCHS_TESTES} matchs testés)",
-    }
-    st.caption(mode_labels.get(st.session_state.mode, ""))
+    info_pool = st.session_state.info_pool
+    db_pool = st.session_state.db_pool
+    st.caption(f"🎫 {len(info_pool)} match(s) prioritaire(s) ci-dessous nécessitent vos infos. {len(db_pool)} autre(s) match(s) seront analysés automatiquement sur données pures.")
     st.subheader("📝 Infos complémentaires (forme actuelle, absences...) — optionnel mais recommandé")
-    new_matches = [m for m in st.session_state.active if m not in st.session_state.extra_info_store]
-    if not new_matches:
-        st.caption("Aucune nouvelle info nécessaire, vous pouvez continuer.")
-    for mid in new_matches:
+    for mid in info_pool:
         st.text_area(f"**{st.session_state.match_labels[mid]}**", key=f"extra_{mid}")
-    if st.button("✅ Valider et analyser les marchés"):
-        for mid in new_matches:
+    if st.button("✅ Valider et analyser tous les marchés"):
+        for mid in info_pool:
             st.session_state.extra_info_store[mid] = st.session_state.get(f"extra_{mid}", "")
-        subset = {}
-        for mid in st.session_state.active:
+        combined = {}
+        for mid in info_pool:
             extra = st.session_state.extra_info_store.get(mid, "")
             txt = st.session_state.match_contexts[mid]
             if extra:
                 txt += f"\nInfos complémentaires utilisateur : {extra}"
-            subset[mid] = txt
-        with st.spinner("🦅 Analyse des marchés en cours..."):
-            human, options = generate_market_options(subset)
-            st.session_state.options_data.update(options)
+            combined[mid] = txt
+        for mid in db_pool:
+            combined[mid] = st.session_state.match_contexts[mid]
+        with st.spinner("🦅 Analyse des marchés pour tous les matchs du pool..."):
+            human, options = generate_market_options(combined)
+            st.session_state.options_data = options
             st.session_state.human_text = human
+            st.session_state.active = info_pool + db_pool
         st.session_state.stage = "options_ready"
         st.rerun()
 
 if st.session_state.stage == "options_ready":
-    threshold_pct = int(get_threshold(st.session_state.mode) * 100)
-    mode_labels = {
-        "simple_double": f"🎫 Mode Simple/Double (seuil de fiabilité ≥ {threshold_pct}%)",
-        "combo_info": f"🎫 Mode Combiné avec infos complémentaires (objectif : {st.session_state.get('target','?')} sélections, seuil ≥ {threshold_pct}%, max {MAX_MATCHS_TESTES} matchs testés)",
-        "multi": f"🎫 Mode Combiné base de données pure (plus de 5 sélections estimées, seuil ≥ {threshold_pct}%)",
-    }
-    st.caption(mode_labels.get(st.session_state.mode, ""))
+    threshold_pct = int(CONFIDENCE_THRESHOLD * 100)
+    st.caption(f"🎫 Seuil de fiabilité minimum requis : {threshold_pct}% — {len(st.session_state.active)} match(s) à renseigner ci-dessous")
     display_aerated(st.session_state.human_text)
-    st.info("Format attendu :\n\nM1: A=1.85 B=1.70 C=1.90 EXTRA: Over1.5=1.25,Over3.5=2.80\n\n(EXTRA optionnel, une ligne par match affiché ci-dessus. Merci de fournir une ligne pour CHAQUE match affiché.)")
+    st.info("Format attendu :\n\nM1: A=1.85 B=1.70 C=1.90 EXTRA: Over1.5=1.25,Over3.5=2.80\n\n(EXTRA optionnel. Merci de fournir une ligne pour CHAQUE match affiché ci-dessus.)")
     odds_input = st.text_area("💬 Cotes réelles trouvées chez votre bookmaker")
     if st.button("✅ Analyser les cotes et finaliser"):
-        with st.spinner("🦅 Analyse de fiabilité et rédaction des justifications..."):
-            threshold = get_threshold(st.session_state.mode)
-            processed_mids = set()
+        with st.spinner("🦅 Analyse de fiabilité en cours..."):
+            recap = {}
             for line in odds_input.strip().split("\n"):
                 parsed = parse_odds_line(line)
                 if not parsed: continue
                 mid, main_odds, extra_pairs = parsed
                 if mid not in st.session_state.active: continue
-                processed_mids.add(mid)
                 best, all_results = evaluate_match_options(mid, st.session_state.options_data, main_odds, extra_pairs, st.session_state.match_contexts[mid])
-                st.session_state.active.remove(mid)
                 if best is None:
-                    st.session_state.rejected.add(mid)
+                    recap[mid] = {"status": "Aucune option exploitable", "label": st.session_state.match_labels[mid]}
                     continue
-                if best["proba"] >= threshold:
-                    justification = get_justification(st.session_state.match_contexts[mid], all_results, best)
-                    st.session_state.validated[mid] = {**best, "label": st.session_state.match_labels[mid], "justification": justification}
+                best["label"] = st.session_state.match_labels[mid]
+                best["mid"] = mid
+                best["all_results"] = all_results
+                if best["proba"] >= CONFIDENCE_THRESHOLD:
+                    st.session_state.validated[mid] = best
+                    recap[mid] = {"status": "Retenu", "market": best["market"], "proba": best["proba"], "cote": best["cote"], "label": best["label"]}
                 else:
-                    st.session_state.rejected.add(mid)
+                    recap[mid] = {"status": f"Écarté (fiabilité {round(best['proba']*100)}% < {threshold_pct}%)", "market": best["market"], "proba": best["proba"], "cote": best["cote"], "label": best["label"]}
 
-            missing = [m for m in st.session_state.active if m not in processed_mids]
-            if missing:
-                st.warning(f"⚠️ Aucune cote détectée pour : {', '.join(missing)}. Ils ont été écartés automatiquement.")
-                for m in missing:
-                    st.session_state.active.remove(m)
-                    st.session_state.rejected.add(m)
+            for mid in st.session_state.active:
+                if mid not in recap:
+                    recap[mid] = {"status": "Aucune cote fournie", "label": st.session_state.match_labels[mid]}
 
-            if st.session_state.mode in ("simple_double", "combo_info"):
-                target = st.session_state.target
-                manque = target - len(st.session_state.validated)
-                while manque > 0 and st.session_state.reserve and st.session_state.tested_count < MAX_MATCHS_TESTES:
-                    nouveau = st.session_state.reserve.pop(0)
-                    st.session_state.active.append(nouveau)
-                    st.session_state.tested_count += 1
-                    manque -= 1
-
-                if len(st.session_state.validated) >= target or not st.session_state.active:
-                    if len(st.session_state.validated) < target and st.session_state.tested_count >= MAX_MATCHS_TESTES:
-                        st.session_state.limit_reached = True
-                    st.session_state.stage = "final"
-                elif st.session_state.tested_count >= MAX_MATCHS_TESTES and not st.session_state.active:
-                    st.session_state.limit_reached = True
-                    st.session_state.stage = "final"
-                elif st.session_state.active:
-                    st.session_state.stage = "info_request"
-                else:
-                    st.session_state.limit_reached = True
-                    st.session_state.stage = "final"
-            else:
-                st.session_state.stage = "final"
+            st.session_state.recap = recap
+            st.session_state.stage = "final"
         st.rerun()
 
 if st.session_state.stage == "final":
     validated = st.session_state.validated
-    threshold_pct = int(get_threshold(st.session_state.mode) * 100)
+    recap = st.session_state.get("recap", {})
+
     if not validated:
-        st.error(f"😕 Aucun marché n'a atteint le seuil de fiabilité requis (≥ {threshold_pct}%). Réessayez avec une autre compétition/cote.")
+        st.error(f"😕 Aucun marché n'a atteint le seuil de fiabilité requis (≥ {int(CONFIDENCE_THRESHOLD*100)}%). Réessayez avec une autre compétition/cote.")
     else:
-        if st.session_state.get("limit_reached"):
-            st.warning(f"⚠️ Limite de {MAX_MATCHS_TESTES} matchs testés atteinte. Seulement {len(validated)} sélection(s) fiable(s) trouvée(s) sur l'objectif de {st.session_state.get('target','?')}.")
+        vals = list(validated.values())
+        max_size = st.session_state.coupon_max_size
+        final_combo = best_subset_matching_target(vals, st.session_state.cote_cible, max_size)
 
-        if st.session_state.mode == "simple_double":
-            vals = list(validated.values())
-            cote_cible = st.session_state.cote_cible
-            if len(vals) == 1:
-                final_combo = vals
-            else:
-                single_best = max(vals, key=lambda v: v["proba"])
-                combo_odds = vals[0]["cote"] * vals[1]["cote"]
-                final_combo = [single_best] if abs(single_best["cote"] - cote_cible) <= abs(combo_odds - cote_cible) else vals
-        else:
-            vals = sorted(validated.values(), key=lambda v: v["proba"], reverse=True)
-            final_combo, prod = [], 1.0
-            for v in vals:
-                if prod >= st.session_state.cote_cible:
-                    break
-                final_combo.append(v)
-                prod *= v["cote"]
-            if not final_combo and vals:
-                final_combo = [vals[0]]
+        for s in final_combo:
+            if "justification" not in s:
+                s["justification"] = get_justification(st.session_state.match_contexts[s["mid"]], s["all_results"], s)
 
-        st.markdown("**🎫 COUPON FINAL (sélection la plus fiable)**")
+        st.markdown("**🎫 COUPON FINAL (meilleure approximation de votre cote cible)**")
         st.write("")
         total_odds = 1.0
         for s in final_combo:
@@ -549,6 +508,13 @@ if st.session_state.stage == "final":
             st.write("")
         st.markdown(f"**🎯 Cote totale : {round(total_odds,2)} (objectif : {st.session_state.cote_cible})**")
         st.warning("⚠️ Vérifiez ces cotes chez votre bookmaker avant de valider définitivement.")
+
+    with st.expander("📋 Récapitulatif complet de tous les matchs analysés"):
+        for mid, r in recap.items():
+            if "market" in r:
+                st.write(f"{r['label']} → {r['market']} | Cote reçue : {r['cote']} | Probabilité : {round(r['proba']*100)}% | Statut : {r['status']}")
+            else:
+                st.write(f"{r['label']} → Statut : {r['status']}")
 
     if st.button("🔄 Nouvelle analyse"):
         for k in list(st.session_state.keys()):
