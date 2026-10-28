@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 
 st.set_page_config(page_title="Œil de l'Aigle 🦅", page_icon="🦅", layout="centered")
 st.title("🦅 L'Œil de l'Aigle")
-st.caption("Analyse sportive basée sur données réelles + calcul d'EV+")
+st.caption("Analyse sportive basée sur données réelles et scénarios les plus probables")
 
 st.markdown("""
 <style>
@@ -35,6 +35,15 @@ COMPETITIONS = {
 }
 
 MAX_MATCHS_TESTES = 8
+
+THRESHOLDS = {
+    "simple_double": 0.80,
+    "combo_info": 0.70,
+    "multi": 0.70,
+}
+
+def get_threshold(mode):
+    return THRESHOLDS.get(mode, 0.70)
 
 def avg(results, key):
     vals = [r[key] for r in results]
@@ -165,14 +174,17 @@ def build_context_blocks(matches, sport, standings_cache):
         contexts[mid] = block
     return contexts, labels
 
-NO_MARKDOWN_RULE = (
+NO_MARKDOWN_BASE = (
     "IMPORTANT : N'utilise JAMAIS de titres Markdown (pas de #, ##, ### ou ===). "
     "Utilise uniquement des emojis et du **gras** pour structurer le texte. "
     "Mets une LIGNE VIDE entre chaque paragraphe, chaque option et chaque probabilité pour aérer la lecture.\n"
+)
+
+NO_MARKDOWN_WITH_BLOCK = NO_MARKDOWN_BASE + (
     "N'écris le texte ###DATA_BLOCK### QU'UNE SEULE FOIS, à la toute fin de ta réponse, jamais ailleurs.\n"
 )
 
-PROMPT_RANKING = NO_MARKDOWN_RULE + """
+PROMPT_RANKING = NO_MARKDOWN_WITH_BLOCK + """
 Tu es ŒIL DE L'AIGLE. On te fournit plusieurs matchs réels avec données (classement, forme).
 Classe-les du PLUS prévisible au MOINS prévisible selon l'écart de niveau/régularité.
 Donne une courte phrase par match (avec une ligne vide entre chaque) puis termine OBLIGATOIREMENT par :
@@ -182,12 +194,12 @@ MID|SCORE_CONFIANCE
 Rien après.
 """
 
-PROMPT_MARKETS = NO_MARKDOWN_RULE + """
+PROMPT_MARKETS = NO_MARKDOWN_WITH_BLOCK + """
 Tu es ŒIL DE L'AIGLE. Pour chaque match fourni (données réelles + infos complémentaires éventuelles), propose EXACTEMENT 3 options de marché parmi :
 FOOTBALL: 1X2, Double Chance, BTTS, Over/Under buts (1.5/2.5/3.5), Total individuel équipe, Handicap asiatique simple.
 BASKETBALL: Victoire, Handicap/Spread, Over/Under points total, Total individuel équipe.
 Interdiction d'autres marchés (pas de corners/cartons/tirs cadrés).
-Donne une probabilité réaliste (0-1) par option.
+Donne une probabilité réaliste (0-1) par option, basée sur les vraies données fournies.
 
 Format par match (respecte bien les lignes vides) :
 
@@ -213,7 +225,7 @@ MID|LETTRE|MARCHE|PROBA
 Rien après.
 """
 
-PROMPT_EXTRA = NO_MARKDOWN_RULE + """
+PROMPT_EXTRA = NO_MARKDOWN_WITH_BLOCK + """
 Tu es ŒIL DE L'AIGLE. On te donne les données d'un match + une liste de marchés additionnels trouvés par l'utilisateur chez son bookmaker.
 Pour CHAQUE marché, donne une probabilité réaliste (0-1) basée sur les données.
 Réponds UNIQUEMENT par :
@@ -223,10 +235,10 @@ NUMERO|PROBA
 Rien d'autre.
 """
 
-PROMPT_JUSTIFY = NO_MARKDOWN_RULE + """
-Tu es ŒIL DE L'AIGLE. On te donne les données réelles d'un match, ainsi que TOUTES les options de marché évaluées (avec leur probabilité estimée, la cote réelle fournie par l'utilisateur, et leur EV calculé), plus l'option FINALEMENT retenue.
-Rédige une justification courte (3-4 phrases MAX) expliquant pourquoi l'option retenue est la meilleure par rapport aux AUTRES options proposées (compare les probabilités, les cotes et l'EV des autres pour montrer pourquoi elles étaient moins intéressantes).
-Ne mets aucun titre, juste le texte direct de la justification.
+PROMPT_JUSTIFY = NO_MARKDOWN_BASE + """
+Tu es ŒIL DE L'AIGLE. On te donne les données réelles d'un match, l'option FINALEMENT retenue (avec sa probabilité et sa cote réelle), ainsi que les AUTRES options qui étaient disponibles (avec leur probabilité et leur cote).
+Rédige une justification courte (3-4 phrases MAX), en texte fluide uniquement, expliquant pourquoi l'option retenue est le scénario le PLUS PROBABLE et le PLUS FIABLE par rapport aux autres options (compare les probabilités entre elles pour montrer pourquoi les autres étaient moins certaines).
+INTERDICTION ABSOLUE d'afficher du code, du JSON, des accolades, des crochets, ou tout bloc technique de type ###DATA_BLOCK###. Uniquement du texte normal en français, aucun titre.
 """
 
 model_ranking = genai.GenerativeModel(model_name="gemini-flash-lite-latest", system_instruction=PROMPT_RANKING)
@@ -276,13 +288,20 @@ def get_extra_probabilities(context_text, market_names):
                 except: pass
     return probs
 
+def clean_justification_text(text):
+    text = text.strip()
+    for marker in ["###DATA_BLOCK###", "```"]:
+        if marker in text:
+            text = text.split(marker)[0].strip()
+    return text
+
 def get_justification(context_text, all_results, best):
     others = [r for r in all_results if r is not best]
-    others_txt = "\n".join([f"- {o['market']} : proba {round(o['proba']*100)}%, cote {o['cote']}, EV {round(o['ev'],2)}" for o in others])
-    best_txt = f"{best['market']} : proba {round(best['proba']*100)}%, cote {best['cote']}, EV {round(best['ev'],2)}"
-    prompt = f"{context_text}\n\nOption retenue :\n{best_txt}\n\nAutres options évaluées :\n{others_txt if others_txt else 'Aucune autre option fournie'}"
+    others_txt = "\n".join([f"- {o['market']} : probabilité {round(o['proba']*100)}%, cote {o['cote']}" for o in others])
+    best_txt = f"{best['market']} : probabilité {round(best['proba']*100)}%, cote {best['cote']}"
+    prompt = f"{context_text}\n\nOption retenue :\n{best_txt}\n\nAutres options disponibles :\n{others_txt if others_txt else 'Aucune autre option fournie'}"
     resp = model_justify.generate_content(prompt)
-    return resp.text.strip()
+    return clean_justification_text(resp.text)
 
 def parse_odds_line(line):
     line = line.strip()
@@ -299,27 +318,30 @@ def parse_odds_line(line):
     extra_pairs = re.findall(r"([A-Za-zÀ-ÿ0-9_\.\+\-]+)\s*=\s*([\d.]+)", extra_part)
     return mid.strip(), main_odds, extra_pairs
 
-def compute_ev(proba, cote):
-    return proba * cote - 1
+def confidence_label(p):
+    if p >= 0.85:
+        return "🔥 Très fiable"
+    elif p >= 0.70:
+        return "✅ Fiable"
+    else:
+        return "🔸 Fiabilité correcte"
 
 def evaluate_match_options(mid, options_data, odds_main, extra_pairs, context_text):
     results = []
     for letter, cote in odds_main.items():
         opt = options_data.get(mid, {}).get(letter)
         if opt:
-            ev = compute_ev(opt["proba"], cote)
-            results.append({"market": opt["name"], "proba": opt["proba"], "cote": cote, "ev": ev})
+            results.append({"market": opt["name"], "proba": opt["proba"], "cote": cote})
     if extra_pairs:
         names = [n for n, _ in extra_pairs]
         probs = get_extra_probabilities(context_text, names)
         for i, (name, cote) in enumerate(extra_pairs):
             p = probs.get(i + 1)
             if p is not None:
-                ev = compute_ev(p, float(cote))
-                results.append({"market": name, "proba": p, "cote": float(cote), "ev": ev})
+                results.append({"market": name, "proba": p, "cote": float(cote)})
     if not results:
         return None, []
-    best = max(results, key=lambda r: r["ev"])
+    best = max(results, key=lambda r: r["proba"])
     return best, results
 
 if "stage" not in st.session_state:
@@ -393,9 +415,10 @@ if st.session_state.stage == "setup":
                 st.rerun()
 
 if st.session_state.stage == "info_request":
+    threshold_pct = int(get_threshold(st.session_state.mode) * 100)
     mode_labels = {
-        "simple_double": "🎫 Mode Simple/Double (objectif : 2 sélections)",
-        "combo_info": f"🎫 Mode Combiné avec infos complémentaires (objectif : {st.session_state.get('target','?')} sélections, max {MAX_MATCHS_TESTES} matchs testés)",
+        "simple_double": f"🎫 Mode Simple/Double (objectif : 2 sélections, seuil de fiabilité ≥ {threshold_pct}%)",
+        "combo_info": f"🎫 Mode Combiné avec infos complémentaires (objectif : {st.session_state.get('target','?')} sélections, seuil ≥ {threshold_pct}%, max {MAX_MATCHS_TESTES} matchs testés)",
     }
     st.caption(mode_labels.get(st.session_state.mode, ""))
     st.subheader("📝 Infos complémentaires (forme actuelle, absences...) — optionnel mais recommandé")
@@ -422,17 +445,19 @@ if st.session_state.stage == "info_request":
         st.rerun()
 
 if st.session_state.stage == "options_ready":
+    threshold_pct = int(get_threshold(st.session_state.mode) * 100)
     mode_labels = {
-        "simple_double": "🎫 Mode Simple/Double",
-        "combo_info": f"🎫 Mode Combiné avec infos complémentaires (objectif : {st.session_state.get('target','?')} sélections, max {MAX_MATCHS_TESTES} matchs testés)",
-        "multi": "🎫 Mode Combiné base de données pure (plus de 5 sélections estimées)",
+        "simple_double": f"🎫 Mode Simple/Double (seuil de fiabilité ≥ {threshold_pct}%)",
+        "combo_info": f"🎫 Mode Combiné avec infos complémentaires (objectif : {st.session_state.get('target','?')} sélections, seuil ≥ {threshold_pct}%, max {MAX_MATCHS_TESTES} matchs testés)",
+        "multi": f"🎫 Mode Combiné base de données pure (plus de 5 sélections estimées, seuil ≥ {threshold_pct}%)",
     }
     st.caption(mode_labels.get(st.session_state.mode, ""))
     display_aerated(st.session_state.human_text)
     st.info("Format attendu :\n\nM1: A=1.85 B=1.70 C=1.90 EXTRA: Over1.5=1.25,Over3.5=2.80\n\n(EXTRA optionnel, une ligne par match affiché ci-dessus. Merci de fournir une ligne pour CHAQUE match affiché.)")
     odds_input = st.text_area("💬 Cotes réelles trouvées chez votre bookmaker")
-    if st.button("✅ Calculer l'EV+ et valider"):
-        with st.spinner("🦅 Calcul des valeurs espérées et justification..."):
+    if st.button("✅ Analyser les cotes et finaliser"):
+        with st.spinner("🦅 Analyse de fiabilité et rédaction des justifications..."):
+            threshold = get_threshold(st.session_state.mode)
             processed_mids = set()
             for line in odds_input.strip().split("\n"):
                 parsed = parse_odds_line(line)
@@ -445,7 +470,7 @@ if st.session_state.stage == "options_ready":
                 if best is None:
                     st.session_state.rejected.add(mid)
                     continue
-                if best["ev"] > 0:
+                if best["proba"] >= threshold:
                     justification = get_justification(st.session_state.match_contexts[mid], all_results, best)
                     st.session_state.validated[mid] = {**best, "label": st.session_state.match_labels[mid], "justification": justification}
                 else:
@@ -485,11 +510,12 @@ if st.session_state.stage == "options_ready":
 
 if st.session_state.stage == "final":
     validated = st.session_state.validated
+    threshold_pct = int(get_threshold(st.session_state.mode) * 100)
     if not validated:
-        st.error("😕 Aucun pari à valeur positive (EV+) détecté. Réessayez avec une autre compétition/cote.")
+        st.error(f"😕 Aucun marché n'a atteint le seuil de fiabilité requis (≥ {threshold_pct}%). Réessayez avec une autre compétition/cote.")
     else:
         if st.session_state.get("limit_reached"):
-            st.warning(f"⚠️ Limite de {MAX_MATCHS_TESTES} matchs testés atteinte. Seulement {len(validated)} sélection(s) à valeur positive trouvée(s) sur l'objectif de {st.session_state.get('target','?')}.")
+            st.warning(f"⚠️ Limite de {MAX_MATCHS_TESTES} matchs testés atteinte. Seulement {len(validated)} sélection(s) fiable(s) trouvée(s) sur l'objectif de {st.session_state.get('target','?')}.")
 
         if st.session_state.mode == "simple_double":
             vals = list(validated.values())
@@ -497,11 +523,11 @@ if st.session_state.stage == "final":
             if len(vals) == 1:
                 final_combo = vals
             else:
-                single_best = max(vals, key=lambda v: v["ev"])
+                single_best = max(vals, key=lambda v: v["proba"])
                 combo_odds = vals[0]["cote"] * vals[1]["cote"]
                 final_combo = [single_best] if abs(single_best["cote"] - cote_cible) <= abs(combo_odds - cote_cible) else vals
         else:
-            vals = sorted(validated.values(), key=lambda v: v["ev"], reverse=True)
+            vals = sorted(validated.values(), key=lambda v: v["proba"], reverse=True)
             final_combo, prod = [], 1.0
             for v in vals:
                 if prod >= st.session_state.cote_cible:
@@ -511,13 +537,14 @@ if st.session_state.stage == "final":
             if not final_combo and vals:
                 final_combo = [vals[0]]
 
-        st.markdown("**🎫 COUPON FINAL (EV+ validé)**")
+        st.markdown("**🎫 COUPON FINAL (sélection la plus fiable)**")
         st.write("")
         total_odds = 1.0
         for s in final_combo:
             total_odds *= s["cote"]
             st.markdown(f"**{s['label']}** → {s['market']}")
-            st.caption(f"Cote: {s['cote']} | Proba: {round(s['proba']*100)}% | EV: {round(s['ev'],2)} ✅")
+            st.caption(f"Cote : {s['cote']} | Probabilité : {round(s['proba']*100)}% | {confidence_label(s['proba'])}")
+            st.write("")
             display_aerated(f"💡 Pourquoi ce choix : {s.get('justification', 'N/A')}")
             st.write("")
         st.markdown(f"**🎯 Cote totale : {round(total_odds,2)} (objectif : {st.session_state.cote_cible})**")
