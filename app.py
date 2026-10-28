@@ -34,10 +34,10 @@ COMPETITIONS = {
     "Primeira Liga (Portugal)": "PPL", "Brasileirão (Brésil)": "BSA",
 }
 
-MAX_MATCHS_TESTES = 8
+MAX_MATCHS_TESTES = 5
 
 THRESHOLDS = {
-    "simple_double": 0.80,
+    "simple_double": 0.70,
     "combo_info": 0.70,
     "multi": 0.70,
 }
