@@ -35,9 +35,29 @@ COMPETITIONS = {
     "Primeira Liga (Portugal)": "PPL", "Brasileirão (Brésil)": "BSA",
 }
 
+BASKETBALL_COMPETITIONS = ["NBA", "Euroligue"]
+SPORT_OPTIONS = ["Football", "Basketball", "Tennis", "Hockey sur glace", "Football américain", "Tout"]
+EVENT_SPORT_OPTIONS = ["Football", "Basketball", "Tennis", "Hockey sur glace", "Football américain"]
+
 MAX_INFO_MATCHES = 5
 MAX_POOL_SIMPLE_COMBO = 10
 CONFIDENCE_THRESHOLD = 0.70
+MAX_MANUAL_SINGLE = 5
+MAX_MANUAL_TOUT = 10
+
+def determine_mode_params(cote_cible):
+    if cote_cible <= 3.00:
+        return "simple_double", 2, 2, MAX_POOL_SIMPLE_COMBO
+    estimated = max(2, round(math.log(cote_cible) / math.log(1.7)))
+    if estimated <= 5:
+        return "combo_info", estimated, 7, MAX_POOL_SIMPLE_COMBO
+    return "multi", None, 7, 15
+
+def mode_badge():
+    if st.session_state.get("manual_mode"):
+        st.warning("⚠️ Mode manuel - analyse basée sur vos données (non vérifiées automatiquement par l'app).")
+    else:
+        st.success("✅ Données vérifiées automatiquement (API officielle)")
 
 def avg(results, key):
     vals = [r[key] for r in results]
@@ -162,7 +182,7 @@ def build_context_blocks(matches, sport, standings_cache):
         else:
             fh = get_basketball_form(m["home_id"]); fa = get_basketball_form(m["away_id"])
             sh, sa = {}, {}
-        block = f"[{mid}] {m['home']} vs {m['away']} ({m['competition']}, {m['date']})\n"
+        block = f"[{mid}] {m['home']} vs {m['away']} (Sport: {sport}, {m['competition']}, {m['date']})\n"
         block += f"- {m['home']} : position {sh.get('position','N/A')} ({sh.get('points','N/A')} pts) | Moy marqués:{avg(fh,'scored')} encaissés:{avg(fh,'conceded')} | 5 derniers:{[r['display'] for r in fh]}\n"
         block += f"- {m['away']} : position {sa.get('position','N/A')} ({sa.get('points','N/A')} pts) | Moy marqués:{avg(fa,'scored')} encaissés:{avg(fa,'conceded')} | 5 derniers:{[r['display'] for r in fa]}\n"
         contexts[mid] = block
@@ -189,11 +209,17 @@ Rien après.
 """
 
 PROMPT_MARKETS = NO_MARKDOWN_WITH_BLOCK + """
-Tu es ŒIL DE L'AIGLE. Pour chaque match fourni (données réelles + infos complémentaires éventuelles), propose EXACTEMENT 3 options de marché parmi :
+Tu es ŒIL DE L'AIGLE. Chaque match fourni indique son sport entre parenthèses (Sport: ...).
+Pour CHAQUE match, applique UNIQUEMENT les 3 marchés autorisés pour SON sport précis, parmi la liste suivante (interdiction de mélanger les règles d'un sport avec un autre, interdiction d'utiliser d'autres marchés) :
+
 FOOTBALL: 1X2, Double Chance, BTTS, Over/Under buts (1.5/2.5/3.5), Total individuel équipe, Handicap asiatique simple.
 BASKETBALL: Victoire, Handicap/Spread, Over/Under points total, Total individuel équipe.
-Interdiction d'autres marchés (pas de corners/cartons/tirs cadrés).
-Donne une probabilité réaliste (0-1) par option, basée sur les vraies données fournies.
+TENNIS: Vainqueur du match, Total jeux Over/Under, Handicap en jeux.
+HOCKEY SUR GLACE: Vainqueur (incluant prolongation), Total buts Over/Under, Puck line (handicap).
+FOOTBALL AMÉRICAIN: Vainqueur (Moneyline), Spread/Handicap, Total points Over/Under.
+
+Donne une probabilité réaliste (0-1) par option, basée sur les données réelles et/ou les informations fournies pour ce match précis.
+Si peu d'informations sont fournies pour un match (mode manuel), reste prudent et réaliste dans tes probabilités.
 
 Format par match (respecte bien les lignes vides) :
 
@@ -357,74 +383,146 @@ if "stage" not in st.session_state:
     st.session_state.stage = "setup"
 
 if st.session_state.stage == "setup":
-    sport = st.selectbox("🏆 Choisissez le sport", ["Football", "Basketball"])
-    if sport == "Basketball":
-        competition = "NBA"
-        st.text_input("Compétition", value="NBA", disabled=True)
-    else:
+    sport = st.selectbox("🏆 Choisissez le sport", SPORT_OPTIONS)
+
+    auto_mode = False
+    competition = None
+
+    if sport == "Football":
         competition = st.selectbox("🏆 Choisissez la compétition", list(COMPETITIONS.keys()) + ["Tout"])
+        auto_mode = True
+    elif sport == "Basketball":
+        competition = st.selectbox("🏆 Choisissez la compétition", BASKETBALL_COMPETITIONS)
+        auto_mode = (competition == "NBA")
+    elif sport == "Tout":
+        competition = "Mixte (multi-sports)"
+        auto_mode = False
+    else:
+        competition = sport
+        auto_mode = False
+
     cote_cible = st.number_input("🎯 Cote cible souhaitée", min_value=1.01, value=2.00, step=0.10)
 
-    if st.button("🚀 Lancer le scan et l'analyse"):
-        if cote_cible <= 3.00:
-            mode = "simple_double"
-            coupon_max_size = 2
-            jours, limit = 2, MAX_POOL_SIMPLE_COMBO
+    nb_manual = None
+    if not auto_mode:
+        st.warning("⚠️ Mode manuel - analyse basée sur vos données. Il n'y a pas de repêchage automatique : prévoyez une petite marge de matchs en plus si certains sont écartés en cours d'analyse.")
+        if sport == "Tout":
+            nb_manual = st.slider("Nombre d'événements à entrer (multi-sports)", 2, MAX_MANUAL_TOUT, 5)
         else:
-            estimated = max(2, round(math.log(cote_cible) / math.log(1.7)))
-            if estimated <= 5:
-                mode = "combo_info"
-                coupon_max_size = estimated
-                jours, limit = 7, MAX_POOL_SIMPLE_COMBO
-            else:
-                mode = "multi"
-                coupon_max_size = None
-                jours, limit = 7, 15
+            nb_manual = st.slider("Nombre de matchs à entrer", 1, MAX_MANUAL_SINGLE, 3)
 
-        date_from = datetime.utcnow().strftime("%Y-%m-%d")
-        date_to = (datetime.utcnow() + timedelta(days=jours)).strftime("%Y-%m-%d")
+    if st.button("🚀 Lancer l'analyse"):
+        mode, coupon_max_size, jours, limit = determine_mode_params(cote_cible)
 
-        spinner_msg = f"🦅 Scan réel en cours sur {limit} matchs max ({jours} jour(s)). Cela peut prendre 2 à 5 minutes selon le sport, patientez..."
-        with st.spinner(spinner_msg):
-            if sport == "Football":
-                matches, standings_cache = get_football_matches(date_from, date_to, competition)
-            else:
-                matches, standings_cache = get_basketball_matches(date_from, date_to)
-            matches = matches[:limit]
+        st.session_state.mode = mode
+        st.session_state.cote_cible = cote_cible
+        st.session_state.coupon_max_size = coupon_max_size
+        st.session_state.sport = sport
+        st.session_state.competition = competition
 
-            if not matches:
-                st.error("Aucun match trouvé. Essayez une autre compétition ou cote.")
-            else:
-                contexts, labels = build_context_blocks(matches, sport, standings_cache)
-                st.session_state.mode = mode
-                st.session_state.cote_cible = cote_cible
-                st.session_state.coupon_max_size = coupon_max_size
-                st.session_state.match_contexts = contexts
-                st.session_state.match_labels = labels
-                st.session_state.validated = {}
-                st.session_state.options_data = {}
-                st.session_state.extra_info_store = {}
+        if auto_mode:
+            st.session_state.manual_mode = False
+            date_from = datetime.utcnow().strftime("%Y-%m-%d")
+            date_to = (datetime.utcnow() + timedelta(days=jours)).strftime("%Y-%m-%d")
 
-                if mode in ("simple_double", "combo_info"):
-                    scores = rank_matches(contexts)
-                    ranked_order = sorted(contexts.keys(), key=lambda m: scores.get(m, 0), reverse=True)
-                    st.session_state.info_pool = ranked_order[:MAX_INFO_MATCHES]
-                    if mode == "simple_double":
-                        st.session_state.db_pool = []
-                        st.session_state.discarded_count = len(ranked_order[MAX_INFO_MATCHES:])
-                    else:
-                        st.session_state.db_pool = ranked_order[MAX_INFO_MATCHES:]
-                        st.session_state.discarded_count = 0
-                    st.session_state.stage = "info_request"
+            spinner_msg = f"🦅 Scan réel en cours sur {limit} matchs max ({jours} jour(s)). Cela peut prendre 2 à 5 minutes selon le sport, patientez..."
+            with st.spinner(spinner_msg):
+                if sport == "Football":
+                    matches, standings_cache = get_football_matches(date_from, date_to, competition)
                 else:
-                    human, options = generate_market_options(contexts)
-                    st.session_state.options_data = options
-                    st.session_state.human_text = human
-                    st.session_state.active = list(contexts.keys())
-                    st.session_state.stage = "options_ready"
-                st.rerun()
+                    matches, standings_cache = get_basketball_matches(date_from, date_to)
+                matches = matches[:limit]
+
+                if not matches:
+                    st.error("Aucun match trouvé. Essayez une autre compétition ou cote.")
+                else:
+                    contexts, labels = build_context_blocks(matches, sport, standings_cache)
+                    st.session_state.match_contexts = contexts
+                    st.session_state.match_labels = labels
+                    st.session_state.validated = {}
+                    st.session_state.options_data = {}
+                    st.session_state.extra_info_store = {}
+
+                    if mode in ("simple_double", "combo_info"):
+                        scores = rank_matches(contexts)
+                        ranked_order = sorted(contexts.keys(), key=lambda m: scores.get(m, 0), reverse=True)
+                        st.session_state.info_pool = ranked_order[:MAX_INFO_MATCHES]
+                        if mode == "simple_double":
+                            st.session_state.db_pool = []
+                            st.session_state.discarded_count = len(ranked_order[MAX_INFO_MATCHES:])
+                        else:
+                            st.session_state.db_pool = ranked_order[MAX_INFO_MATCHES:]
+                            st.session_state.discarded_count = 0
+                        st.session_state.stage = "info_request"
+                    else:
+                        human, options = generate_market_options(contexts)
+                        st.session_state.options_data = options
+                        st.session_state.human_text = human
+                        st.session_state.active = list(contexts.keys())
+                        st.session_state.stage = "options_ready"
+                    st.rerun()
+        else:
+            st.session_state.manual_mode = True
+            st.session_state.manual_sport = sport
+            st.session_state.nb_manual = nb_manual
+            st.session_state.stage = "manual_entry"
+            st.rerun()
+
+if st.session_state.stage == "manual_entry":
+    mode_badge()
+    st.subheader("📝 Renseignez vos événements")
+    nb = st.session_state.nb_manual
+    sport_fixed = st.session_state.manual_sport
+    entries = []
+    for i in range(nb):
+        st.markdown(f"**Événement {i+1}**")
+        if sport_fixed == "Tout":
+            ev_sport = st.selectbox(f"Sport de l'événement {i+1}", EVENT_SPORT_OPTIONS, key=f"m_sport_{i}")
+        else:
+            ev_sport = sport_fixed
+            st.caption(f"Sport : {ev_sport}")
+        c1, c2 = st.columns(2)
+        with c1:
+            home = st.text_input("Participant / équipe A", key=f"m_home_{i}")
+        with c2:
+            away = st.text_input("Participant / équipe B", key=f"m_away_{i}")
+        info = st.text_area(
+            "Infos / contexte (forme récente, classement, blessures, confrontations directes...)",
+            key=f"m_info_{i}",
+            placeholder="Ex : source Score24 — 3 dernières confrontations, forme actuelle, absences, surface/terrain, etc."
+        )
+        entries.append({"sport": ev_sport, "home": home, "away": away, "info": info})
+        st.divider()
+
+    missing = [i + 1 for i, e in enumerate(entries) if not e["home"].strip() or not e["away"].strip()]
+    if missing:
+        st.info(f"⚠️ Renseignez au minimum les deux noms pour les événements : {', '.join(map(str, missing))}")
+
+    if st.button("✅ Valider les événements et générer les marchés", disabled=bool(missing)):
+        contexts, labels = {}, {}
+        for i, e in enumerate(entries):
+            mid = f"M{i+1}"
+            labels[mid] = f"{e['home']} vs {e['away']} ({e['sport']})"
+            block = f"[{mid}] {e['home']} vs {e['away']} (Sport: {e['sport']})\n"
+            if e["info"].strip():
+                block += f"Infos fournies par l'utilisateur : {e['info'].strip()}\n"
+            else:
+                block += "Aucune info complémentaire fournie par l'utilisateur.\n"
+            contexts[mid] = block
+        st.session_state.match_contexts = contexts
+        st.session_state.match_labels = labels
+        st.session_state.validated = {}
+        st.session_state.extra_info_store = {}
+        with st.spinner("🦅 Génération des marchés en cours..."):
+            human, options = generate_market_options(contexts)
+            st.session_state.options_data = options
+            st.session_state.human_text = human
+            st.session_state.active = list(contexts.keys())
+        st.session_state.stage = "options_ready"
+        st.rerun()
 
 if st.session_state.stage == "info_request":
+    mode_badge()
     info_pool = st.session_state.info_pool
     db_pool = st.session_state.db_pool
     if st.session_state.mode == "simple_double":
@@ -455,6 +553,7 @@ if st.session_state.stage == "info_request":
         st.rerun()
 
 if st.session_state.stage == "options_ready":
+    mode_badge()
     threshold_pct = int(CONFIDENCE_THRESHOLD * 100)
     active = st.session_state.active
     st.caption(f"🎫 Seuil de fiabilité minimum requis : {threshold_pct}% — {len(active)} match(s) à renseigner ci-dessous")
@@ -499,6 +598,7 @@ if st.session_state.stage == "options_ready":
         st.rerun()
 
 if st.session_state.stage == "final":
+    mode_badge()
     validated = st.session_state.validated
     recap = st.session_state.get("recap", {})
 
