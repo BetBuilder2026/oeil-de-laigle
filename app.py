@@ -34,6 +34,8 @@ COMPETITIONS = {
     "Primeira Liga (Portugal)": "PPL", "Brasileirão (Brésil)": "BSA",
 }
 
+MAX_MATCHS_TESTES = 8
+
 def avg(results, key):
     vals = [r[key] for r in results]
     return round(sum(vals) / len(vals), 2) if vals else "N/A"
@@ -369,6 +371,8 @@ if st.session_state.stage == "setup":
                 st.session_state.rejected = set()
                 st.session_state.options_data = {}
                 st.session_state.extra_info_store = {}
+                st.session_state.tested_count = 0
+                st.session_state.limit_reached = False
 
                 if mode in ("simple_double", "combo_info"):
                     scores = rank_matches(contexts)
@@ -377,6 +381,7 @@ if st.session_state.stage == "setup":
                     st.session_state.target = target
                     st.session_state.ranked_order = ranked_order
                     st.session_state.active = ranked_order[:target]
+                    st.session_state.tested_count = len(st.session_state.active)
                     st.session_state.reserve = ranked_order[target:]
                     st.session_state.stage = "info_request"
                 else:
@@ -390,7 +395,7 @@ if st.session_state.stage == "setup":
 if st.session_state.stage == "info_request":
     mode_labels = {
         "simple_double": "🎫 Mode Simple/Double (objectif : 2 sélections)",
-        "combo_info": f"🎫 Mode Combiné avec infos complémentaires (objectif : {st.session_state.get('target','?')} sélections)",
+        "combo_info": f"🎫 Mode Combiné avec infos complémentaires (objectif : {st.session_state.get('target','?')} sélections, max {MAX_MATCHS_TESTES} matchs testés)",
     }
     st.caption(mode_labels.get(st.session_state.mode, ""))
     st.subheader("📝 Infos complémentaires (forme actuelle, absences...) — optionnel mais recommandé")
@@ -419,7 +424,7 @@ if st.session_state.stage == "info_request":
 if st.session_state.stage == "options_ready":
     mode_labels = {
         "simple_double": "🎫 Mode Simple/Double",
-        "combo_info": f"🎫 Mode Combiné avec infos complémentaires (objectif : {st.session_state.get('target','?')} sélections)",
+        "combo_info": f"🎫 Mode Combiné avec infos complémentaires (objectif : {st.session_state.get('target','?')} sélections, max {MAX_MATCHS_TESTES} matchs testés)",
         "multi": "🎫 Mode Combiné base de données pure (plus de 5 sélections estimées)",
     }
     st.caption(mode_labels.get(st.session_state.mode, ""))
@@ -455,11 +460,24 @@ if st.session_state.stage == "options_ready":
 
             if st.session_state.mode in ("simple_double", "combo_info"):
                 target = st.session_state.target
-                while (len(st.session_state.active) + len(st.session_state.validated) < target) and st.session_state.reserve:
-                    st.session_state.active.append(st.session_state.reserve.pop(0))
-                if st.session_state.active:
+                manque = target - len(st.session_state.validated)
+                while manque > 0 and st.session_state.reserve and st.session_state.tested_count < MAX_MATCHS_TESTES:
+                    nouveau = st.session_state.reserve.pop(0)
+                    st.session_state.active.append(nouveau)
+                    st.session_state.tested_count += 1
+                    manque -= 1
+
+                if len(st.session_state.validated) >= target or not st.session_state.active:
+                    if len(st.session_state.validated) < target and st.session_state.tested_count >= MAX_MATCHS_TESTES:
+                        st.session_state.limit_reached = True
+                    st.session_state.stage = "final"
+                elif st.session_state.tested_count >= MAX_MATCHS_TESTES and not st.session_state.active:
+                    st.session_state.limit_reached = True
+                    st.session_state.stage = "final"
+                elif st.session_state.active:
                     st.session_state.stage = "info_request"
                 else:
+                    st.session_state.limit_reached = True
                     st.session_state.stage = "final"
             else:
                 st.session_state.stage = "final"
@@ -470,6 +488,9 @@ if st.session_state.stage == "final":
     if not validated:
         st.error("😕 Aucun pari à valeur positive (EV+) détecté. Réessayez avec une autre compétition/cote.")
     else:
+        if st.session_state.get("limit_reached"):
+            st.warning(f"⚠️ Limite de {MAX_MATCHS_TESTES} matchs testés atteinte. Seulement {len(validated)} sélection(s) à valeur positive trouvée(s) sur l'objectif de {st.session_state.get('target','?')}.")
+
         if st.session_state.mode == "simple_double":
             vals = list(validated.values())
             cote_cible = st.session_state.cote_cible
