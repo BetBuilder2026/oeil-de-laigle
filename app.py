@@ -14,9 +14,12 @@ st.markdown("""
 h1 { font-size: 26px !important; }
 h2 { font-size: 20px !important; }
 h3 { font-size: 18px !important; }
-p, li, div { font-size: 16px !important; }
+p, li, div { font-size: 16px !important; line-height: 1.8 !important; }
 </style>
 """, unsafe_allow_html=True)
+
+def display_aerated(text):
+    st.markdown(f"<div style='white-space: pre-line; line-height: 1.9;'>{text}</div>", unsafe_allow_html=True)
 
 genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 FOOTBALL_HEADERS = {"X-Auth-Token": st.secrets["FOOTBALL_API_KEY"]}
@@ -163,12 +166,16 @@ def build_context_blocks(matches, sport, standings_cache):
     return contexts, labels
 
 # ================= PROMPTS & MODELES =================
-NO_MARKDOWN_RULE = "IMPORTANT : N'utilise JAMAIS de titres Markdown (pas de #, ##, ### ou ===). Utilise uniquement des emojis et du **gras** pour structurer le texte.\n"
+NO_MARKDOWN_RULE = (
+    "IMPORTANT : N'utilise JAMAIS de titres Markdown (pas de #, ##, ### ou ===). "
+    "Utilise uniquement des emojis et du **gras** pour structurer le texte. "
+    "Mets une LIGNE VIDE entre chaque paragraphe, chaque option et chaque probabilité pour aérer la lecture.\n"
+)
 
 PROMPT_RANKING = NO_MARKDOWN_RULE + """
 Tu es ŒIL DE L'AIGLE. On te fournit plusieurs matchs réels avec données (classement, forme).
 Classe-les du PLUS prévisible au MOINS prévisible selon l'écart de niveau/régularité.
-Donne une courte phrase par match puis termine OBLIGATOIREMENT par :
+Donne une courte phrase par match (avec une ligne vide entre chaque) puis termine OBLIGATOIREMENT par :
 ###DATA_BLOCK###
 MID|SCORE_CONFIANCE
 (score entre 0 et 1, ex: M3|0.82)
@@ -181,12 +188,24 @@ FOOTBALL: 1X2, Double Chance, BTTS, Over/Under buts (1.5/2.5/3.5), Total individ
 BASKETBALL: Victoire, Handicap/Spread, Over/Under points total, Total individuel équipe.
 Interdiction d'autres marchés (pas de corners/cartons/tirs cadrés).
 Donne une probabilité réaliste (0-1) par option.
-Format par match :
+
+Format par match (respecte bien les lignes vides) :
+
 🎯 [MID] NOM DU MATCH
+
 📊 Résumé des données prises en compte
-🅰️ Option A : ... — Confiance : XX%
-🅱️ Option B : ... — Confiance : XX%
-🅲️ Option C : ... — Confiance : XX%
+
+🅰️ Option A : ...
+
+Probabilité : XX%
+
+🅱️ Option B : ...
+
+Probabilité : XX%
+
+🅲️ Option C : ...
+
+Probabilité : XX%
 
 Puis termine OBLIGATOIREMENT par :
 ###DATA_BLOCK###
@@ -240,7 +259,7 @@ def generate_market_options(contexts_dict):
         if len(p) == 4:
             mid, letter, name, proba = p
             try:
-                options.setdefault(mid.strip(), {})[letter.strip()] = {"name": name.strip(), "proba": float(proba.strip())}
+                options.setdefault(mid.strip(), {})[letter.strip().upper()] = {"name": name.strip(), "proba": float(proba.strip())}
             except: pass
     return human, options
 
@@ -275,10 +294,10 @@ def parse_odds_line(line):
         main_part, extra_part = rest.split("EXTRA:", 1)
     else:
         main_part, extra_part = rest, ""
-    main_pairs = re.findall(r"([ABC])\s*=\s*([\d.]+)", main_part)
-    main_odds = {l: float(c) for l, c in main_pairs}
+    main_pairs = re.findall(r"([ABCabc])\s*=\s*([\d.]+)", main_part)
+    main_odds = {l.upper(): float(c) for l, c in main_pairs}
     extra_pairs = re.findall(r"([A-Za-zÀ-ÿ0-9_\.\+\-]+)\s*=\s*([\d.]+)", extra_part)
-    return mid, main_odds, extra_pairs
+    return mid.strip(), main_odds, extra_pairs
 
 def compute_ev(proba, cote):
     return proba * cote - 1
@@ -320,6 +339,7 @@ if st.session_state.stage == "setup":
     if st.button("🚀 Lancer le scan et l'analyse"):
         mode = "simple_double" if cote_cible <= 3.00 else "multi"
         jours = 2 if mode == "simple_double" else 7
+        limit = 6 if mode == "simple_double" else 15
         date_from = datetime.utcnow().strftime("%Y-%m-%d")
         date_to = (datetime.utcnow() + timedelta(days=jours)).strftime("%Y-%m-%d")
 
@@ -328,7 +348,7 @@ if st.session_state.stage == "setup":
                 matches, standings_cache = get_football_matches(date_from, date_to, competition)
             else:
                 matches, standings_cache = get_basketball_matches(date_from, date_to)
-            matches = matches[:15]
+            matches = matches[:limit]
 
             if not matches:
                 st.error("Aucun match trouvé. Essayez une autre compétition ou cote.")
@@ -363,6 +383,8 @@ if st.session_state.stage == "setup":
 if st.session_state.stage == "info_request":
     st.subheader("📝 Infos complémentaires (forme actuelle, absences...) — optionnel mais recommandé")
     new_matches = [m for m in st.session_state.active if m not in st.session_state.extra_info_store]
+    if not new_matches:
+        st.caption("Aucune nouvelle info nécessaire, vous pouvez continuer.")
     for mid in new_matches:
         st.text_area(f"**{st.session_state.match_labels[mid]}**", key=f"extra_{mid}")
     if st.button("✅ Valider et analyser les marchés"):
@@ -384,24 +406,35 @@ if st.session_state.stage == "info_request":
 
 # ================= ETAPE OPTIONS READY =================
 if st.session_state.stage == "options_ready":
-    st.markdown(st.session_state.human_text)
-    st.info("Format attendu :\nM1: A=1.85 B=1.70 C=1.90 EXTRA: Over1.5=1.25,Over3.5=2.80\n(EXTRA optionnel, une ligne par match affiché ci-dessus)")
+    display_aerated(st.session_state.human_text)
+    st.info("Format attendu :\n\nM1: A=1.85 B=1.70 C=1.90 EXTRA: Over1.5=1.25,Over3.5=2.80\n\n(EXTRA optionnel, une ligne par match affiché ci-dessus. Merci de fournir une ligne pour CHAQUE match affiché.)")
     odds_input = st.text_area("💬 Cotes réelles trouvées chez votre bookmaker")
     if st.button("✅ Calculer l'EV+ et valider"):
         with st.spinner("🦅 Calcul des valeurs espérées et justification..."):
+            processed_mids = set()
             for line in odds_input.strip().split("\n"):
                 parsed = parse_odds_line(line)
                 if not parsed: continue
                 mid, main_odds, extra_pairs = parsed
                 if mid not in st.session_state.active: continue
+                processed_mids.add(mid)
                 best, all_results = evaluate_match_options(mid, st.session_state.options_data, main_odds, extra_pairs, st.session_state.match_contexts[mid])
-                if best is None: continue
                 st.session_state.active.remove(mid)
+                if best is None:
+                    st.session_state.rejected.add(mid)
+                    continue
                 if best["ev"] > 0:
                     justification = get_justification(st.session_state.match_contexts[mid], all_results, best)
                     st.session_state.validated[mid] = {**best, "label": st.session_state.match_labels[mid], "justification": justification}
                 else:
                     st.session_state.rejected.add(mid)
+
+            missing = [m for m in st.session_state.active if m not in processed_mids]
+            if missing:
+                st.warning(f"⚠️ Aucune cote détectée pour : {', '.join(missing)}. Ils ont été écartés automatiquement.")
+                for m in missing:
+                    st.session_state.active.remove(m)
+                    st.session_state.rejected.add(m)
 
             if st.session_state.mode == "simple_double":
                 target = 2
@@ -442,11 +475,14 @@ if st.session_state.stage == "final":
                 final_combo = [vals[0]]
 
         st.markdown("**🎫 COUPON FINAL (EV+ validé)**")
+        st.write("")
         total_odds = 1.0
         for s in final_combo:
             total_odds *= s["cote"]
-            st.markdown(f"**{s['label']}** → {s['market']} | Cote: {s['cote']} | Proba: {round(s['proba']*100)}% | EV: {round(s['ev'],2)} ✅")
-            st.caption(f"💡 Pourquoi ce choix : {s.get('justification', 'N/A')}")
+            st.markdown(f"**{s['label']}** → {s['market']}")
+            st.caption(f"Cote: {s['cote']} | Proba: {round(s['proba']*100)}% | EV: {round(s['ev'],2)} ✅")
+            display_aerated(f"💡 Pourquoi ce choix : {s.get('justification', 'N/A')}")
+            st.write("")
         st.markdown(f"**🎯 Cote totale : {round(total_odds,2)} (objectif : {st.session_state.cote_cible})**")
         st.warning("⚠️ Vérifiez ces cotes chez votre bookmaker avant de valider définitivement.")
 
