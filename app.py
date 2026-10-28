@@ -409,7 +409,12 @@ if st.session_state.stage == "setup":
                     scores = rank_matches(contexts)
                     ranked_order = sorted(contexts.keys(), key=lambda m: scores.get(m, 0), reverse=True)
                     st.session_state.info_pool = ranked_order[:MAX_INFO_MATCHES]
-                    st.session_state.db_pool = ranked_order[MAX_INFO_MATCHES:]
+                    if mode == "simple_double":
+                        st.session_state.db_pool = []
+                        st.session_state.discarded_count = len(ranked_order[MAX_INFO_MATCHES:])
+                    else:
+                        st.session_state.db_pool = ranked_order[MAX_INFO_MATCHES:]
+                        st.session_state.discarded_count = 0
                     st.session_state.stage = "info_request"
                 else:
                     human, options = generate_market_options(contexts)
@@ -422,7 +427,10 @@ if st.session_state.stage == "setup":
 if st.session_state.stage == "info_request":
     info_pool = st.session_state.info_pool
     db_pool = st.session_state.db_pool
-    st.caption(f"🎫 {len(info_pool)} match(s) prioritaire(s) ci-dessous nécessitent vos infos. {len(db_pool)} autre(s) match(s) seront analysés automatiquement sur données pures.")
+    if st.session_state.mode == "simple_double":
+        st.caption(f"🎫 Sur les {len(info_pool) + st.session_state.discarded_count} matchs scannés, les {len(info_pool)} plus fiables ont été retenus ci-dessous. Les {st.session_state.discarded_count} autres ont été écartés pour gagner du temps.")
+    else:
+        st.caption(f"🎫 {len(info_pool)} match(s) prioritaire(s) ci-dessous nécessitent vos infos. {len(db_pool)} autre(s) match(s) seront analysés automatiquement sur données pures, mais tous comptent pour le coupon final.")
     st.subheader("📝 Infos complémentaires (forme actuelle, absences...) — optionnel mais recommandé")
     for mid in info_pool:
         st.text_area(f"**{st.session_state.match_labels[mid]}**", key=f"extra_{mid}")
@@ -448,11 +456,20 @@ if st.session_state.stage == "info_request":
 
 if st.session_state.stage == "options_ready":
     threshold_pct = int(CONFIDENCE_THRESHOLD * 100)
-    st.caption(f"🎫 Seuil de fiabilité minimum requis : {threshold_pct}% — {len(st.session_state.active)} match(s) à renseigner ci-dessous")
+    active = st.session_state.active
+    st.caption(f"🎫 Seuil de fiabilité minimum requis : {threshold_pct}% — {len(active)} match(s) à renseigner ci-dessous")
     display_aerated(st.session_state.human_text)
     st.info("Format attendu :\n\nM1: A=1.85 B=1.70 C=1.90 EXTRA: Over1.5=1.25,Over3.5=2.80\n\n(EXTRA optionnel. Merci de fournir une ligne pour CHAQUE match affiché ci-dessus.)")
-    odds_input = st.text_area("💬 Cotes réelles trouvées chez votre bookmaker")
-    if st.button("✅ Analyser les cotes et finaliser"):
+    odds_input = st.text_area("💬 Cotes réelles trouvées chez votre bookmaker", key="odds_input_text")
+
+    found_mids = set(re.findall(r"(M\d+)\s*:", odds_input))
+    required_mids = set(active)
+    missing_mids = sorted(required_mids - found_mids, key=lambda x: int(x[1:]))
+
+    if missing_mids:
+        st.warning(f"⚠️ Il manque la ou les cotes pour : {', '.join(missing_mids)}. Complétez toutes les lignes avant de continuer.")
+
+    if st.button("✅ Analyser les cotes et finaliser", disabled=bool(missing_mids)):
         with st.spinner("🦅 Analyse de fiabilité en cours..."):
             recap = {}
             for line in odds_input.strip().split("\n"):
