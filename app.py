@@ -59,6 +59,10 @@ def mode_badge():
     else:
         st.success("✅ Données vérifiées automatiquement (API officielle)")
 
+def go_back_to_setup():
+    st.session_state.stage = "setup"
+    st.rerun()
+
 def avg(results, key):
     vals = [r[key] for r in results]
     return round(sum(vals) / len(vals), 2) if vals else "N/A"
@@ -383,16 +387,16 @@ if "stage" not in st.session_state:
     st.session_state.stage = "setup"
 
 if st.session_state.stage == "setup":
-    sport = st.selectbox("🏆 Choisissez le sport", SPORT_OPTIONS)
+    sport = st.selectbox("🏆 Choisissez le sport", SPORT_OPTIONS, key="setup_sport")
 
     auto_mode = False
     competition = None
 
     if sport == "Football":
-        competition = st.selectbox("🏆 Choisissez la compétition", list(COMPETITIONS.keys()) + ["Tout"])
+        competition = st.selectbox("🏆 Choisissez la compétition", list(COMPETITIONS.keys()) + ["Tout"], key="setup_football_comp")
         auto_mode = True
     elif sport == "Basketball":
-        competition = st.selectbox("🏆 Choisissez la compétition", BASKETBALL_COMPETITIONS)
+        competition = st.selectbox("🏆 Choisissez la compétition", BASKETBALL_COMPETITIONS, key="setup_basket_comp")
         auto_mode = (competition == "NBA")
     elif sport == "Tout":
         competition = "Mixte (multi-sports)"
@@ -401,15 +405,15 @@ if st.session_state.stage == "setup":
         competition = sport
         auto_mode = False
 
-    cote_cible = st.number_input("🎯 Cote cible souhaitée", min_value=1.01, value=2.00, step=0.10)
+    cote_cible = st.number_input("🎯 Cote cible souhaitée", min_value=1.01, value=2.00, step=0.10, key="setup_cote")
 
     nb_manual = None
     if not auto_mode:
         st.warning("⚠️ Mode manuel - analyse basée sur vos données. Il n'y a pas de repêchage automatique : prévoyez une petite marge de matchs en plus si certains sont écartés en cours d'analyse.")
         if sport == "Tout":
-            nb_manual = st.slider("Nombre d'événements à entrer (multi-sports)", 2, MAX_MANUAL_TOUT, 5)
+            nb_manual = st.slider("Nombre d'événements à entrer (multi-sports)", 2, MAX_MANUAL_TOUT, 5, key="setup_nb_tout")
         else:
-            nb_manual = st.slider("Nombre de matchs à entrer", 1, MAX_MANUAL_SINGLE, 3)
+            nb_manual = st.slider("Nombre de matchs à entrer", 1, MAX_MANUAL_SINGLE, 3, key="setup_nb_single")
 
     if st.button("🚀 Lancer l'analyse"):
         mode, coupon_max_size, jours, limit = determine_mode_params(cote_cible)
@@ -469,6 +473,8 @@ if st.session_state.stage == "setup":
             st.rerun()
 
 if st.session_state.stage == "manual_entry":
+    if st.button("⬅️ Retour à l'accueil"):
+        go_back_to_setup()
     mode_badge()
     st.subheader("📝 Renseignez vos événements")
     nb = st.session_state.nb_manual
@@ -522,6 +528,8 @@ if st.session_state.stage == "manual_entry":
         st.rerun()
 
 if st.session_state.stage == "info_request":
+    if st.button("⬅️ Retour à l'accueil"):
+        go_back_to_setup()
     mode_badge()
     info_pool = st.session_state.info_pool
     db_pool = st.session_state.db_pool
