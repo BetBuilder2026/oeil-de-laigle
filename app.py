@@ -3,6 +3,7 @@ import google.generativeai as genai
 import requests
 import time
 import re
+import math
 from datetime import datetime, timedelta
 
 st.set_page_config(page_title="Œil de l'Aigle 🦅", page_icon="🦅", layout="centered")
@@ -33,12 +34,10 @@ COMPETITIONS = {
     "Primeira Liga (Portugal)": "PPL", "Brasileirão (Brésil)": "BSA",
 }
 
-# ================= OUTILS =================
 def avg(results, key):
     vals = [r[key] for r in results]
     return round(sum(vals) / len(vals), 2) if vals else "N/A"
 
-# ================= FOOTBALL =================
 def get_standings_table(code):
     url = f"https://api.football-data.org/v4/competitions/{code}/standings"
     table = {}
@@ -104,7 +103,6 @@ def get_football_form(team_id):
         pass
     return results
 
-# ================= BASKETBALL =================
 def get_basketball_matches(date_from, date_to):
     url = "https://api.balldontlie.io/v1/games"
     params = {"start_date": date_from, "end_date": date_to, "per_page": 50}
@@ -165,7 +163,6 @@ def build_context_blocks(matches, sport, standings_cache):
         contexts[mid] = block
     return contexts, labels
 
-# ================= PROMPTS & MODELES =================
 NO_MARKDOWN_RULE = (
     "IMPORTANT : N'utilise JAMAIS de titres Markdown (pas de #, ##, ### ou ===). "
     "Utilise uniquement des emojis et du **gras** pour structurer le texte. "
@@ -322,11 +319,9 @@ def evaluate_match_options(mid, options_data, odds_main, extra_pairs, context_te
     best = max(results, key=lambda r: r["ev"])
     return best, results
 
-# ================= ETAT INITIAL =================
 if "stage" not in st.session_state:
     st.session_state.stage = "setup"
 
-# ================= ETAPE SETUP =================
 if st.session_state.stage == "setup":
     sport = st.selectbox("🏆 Choisissez le sport", ["Football", "Basketball"])
     if sport == "Basketball":
@@ -337,7 +332,18 @@ if st.session_state.stage == "setup":
     cote_cible = st.number_input("🎯 Cote cible souhaitée", min_value=1.01, value=2.00, step=0.10)
 
     if st.button("🚀 Lancer le scan et l'analyse"):
-        mode = "simple_double" if cote_cible <= 3.00 else "multi"
+        if cote_cible <= 3.00:
+            mode = "simple_double"
+            target_selections = 2
+        else:
+            estimated = max(2, round(math.log(cote_cible) / math.log(1.7)))
+            if estimated <= 5:
+                mode = "combo_info"
+                target_selections = estimated
+            else:
+                mode = "multi"
+                target_selections = None
+
         jours = 2 if mode == "simple_double" else 7
         limit = 6 if mode == "simple_double" else 15
         date_from = datetime.utcnow().strftime("%Y-%m-%d")
@@ -363,10 +369,11 @@ if st.session_state.stage == "setup":
                 st.session_state.options_data = {}
                 st.session_state.extra_info_store = {}
 
-                if mode == "simple_double":
+                if mode in ("simple_double", "combo_info"):
                     scores = rank_matches(contexts)
                     ranked_order = sorted(contexts.keys(), key=lambda m: scores.get(m, 0), reverse=True)
-                    target = min(2, len(ranked_order))
+                    target = min(target_selections, len(ranked_order))
+                    st.session_state.target = target
                     st.session_state.ranked_order = ranked_order
                     st.session_state.active = ranked_order[:target]
                     st.session_state.reserve = ranked_order[target:]
@@ -379,8 +386,12 @@ if st.session_state.stage == "setup":
                     st.session_state.stage = "options_ready"
                 st.rerun()
 
-# ================= ETAPE INFO REQUEST (simple/double) =================
 if st.session_state.stage == "info_request":
+    mode_labels = {
+        "simple_double": "🎫 Mode Simple/Double (objectif : 2 sélections)",
+        "combo_info": f"🎫 Mode Combiné avec infos complémentaires (objectif : {st.session_state.get('target','?')} sélections)",
+    }
+    st.caption(mode_labels.get(st.session_state.mode, ""))
     st.subheader("📝 Infos complémentaires (forme actuelle, absences...) — optionnel mais recommandé")
     new_matches = [m for m in st.session_state.active if m not in st.session_state.extra_info_store]
     if not new_matches:
@@ -404,8 +415,13 @@ if st.session_state.stage == "info_request":
         st.session_state.stage = "options_ready"
         st.rerun()
 
-# ================= ETAPE OPTIONS READY =================
 if st.session_state.stage == "options_ready":
+    mode_labels = {
+        "simple_double": "🎫 Mode Simple/Double",
+        "combo_info": f"🎫 Mode Combiné avec infos complémentaires (objectif : {st.session_state.get('target','?')} sélections)",
+        "multi": "🎫 Mode Combiné base de données pure (plus de 5 sélections estimées)",
+    }
+    st.caption(mode_labels.get(st.session_state.mode, ""))
     display_aerated(st.session_state.human_text)
     st.info("Format attendu :\n\nM1: A=1.85 B=1.70 C=1.90 EXTRA: Over1.5=1.25,Over3.5=2.80\n\n(EXTRA optionnel, une ligne par match affiché ci-dessus. Merci de fournir une ligne pour CHAQUE match affiché.)")
     odds_input = st.text_area("💬 Cotes réelles trouvées chez votre bookmaker")
@@ -436,8 +452,8 @@ if st.session_state.stage == "options_ready":
                     st.session_state.active.remove(m)
                     st.session_state.rejected.add(m)
 
-            if st.session_state.mode == "simple_double":
-                target = 2
+            if st.session_state.mode in ("simple_double", "combo_info"):
+                target = st.session_state.target
                 while (len(st.session_state.active) + len(st.session_state.validated) < target) and st.session_state.reserve:
                     st.session_state.active.append(st.session_state.reserve.pop(0))
                 if st.session_state.active:
@@ -448,7 +464,6 @@ if st.session_state.stage == "options_ready":
                 st.session_state.stage = "final"
         st.rerun()
 
-# ================= ETAPE FINALE =================
 if st.session_state.stage == "final":
     validated = st.session_state.validated
     if not validated:
