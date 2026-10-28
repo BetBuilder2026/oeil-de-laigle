@@ -167,6 +167,7 @@ NO_MARKDOWN_RULE = (
     "IMPORTANT : N'utilise JAMAIS de titres Markdown (pas de #, ##, ### ou ===). "
     "Utilise uniquement des emojis et du **gras** pour structurer le texte. "
     "Mets une LIGNE VIDE entre chaque paragraphe, chaque option et chaque probabilité pour aérer la lecture.\n"
+    "N'écris le texte ###DATA_BLOCK### QU'UNE SEULE FOIS, à la toute fin de ta réponse, jamais ailleurs.\n"
 )
 
 PROMPT_RANKING = NO_MARKDOWN_RULE + """
@@ -204,7 +205,7 @@ Probabilité : XX%
 
 Probabilité : XX%
 
-Puis termine OBLIGATOIREMENT par :
+Puis termine OBLIGATOIREMENT par (une seule fois, à la toute fin) :
 ###DATA_BLOCK###
 MID|LETTRE|MARCHE|PROBA
 Rien après.
@@ -235,7 +236,7 @@ def rank_matches(contexts):
     resp = model_ranking.generate_content("\n".join(contexts.values()))
     scores = {}
     if "###DATA_BLOCK###" in resp.text:
-        _, data = resp.text.split("###DATA_BLOCK###")
+        _, data = resp.text.split("###DATA_BLOCK###", 1)
         for line in data.strip().split("\n"):
             p = line.strip().split("|")
             if len(p) == 2:
@@ -247,7 +248,7 @@ def generate_market_options(contexts_dict):
     resp = model_markets.generate_content("\n".join(contexts_dict.values()))
     text = resp.text
     if "###DATA_BLOCK###" in text:
-        human, data = text.split("###DATA_BLOCK###")
+        human, data = text.split("###DATA_BLOCK###", 1)
     else:
         human, data = text, ""
     options = {}
@@ -265,7 +266,7 @@ def get_extra_probabilities(context_text, market_names):
     resp = model_extra.generate_content(f"{context_text}\n\nMarchés à évaluer :\n{joined}")
     probs = {}
     if "###DATA_BLOCK###" in resp.text:
-        _, data = resp.text.split("###DATA_BLOCK###")
+        _, data = resp.text.split("###DATA_BLOCK###", 1)
         for line in data.strip().split("\n"):
             p = line.strip().split("|")
             if len(p) == 2:
