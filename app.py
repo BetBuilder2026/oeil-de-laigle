@@ -41,17 +41,35 @@ EVENT_SPORT_OPTIONS = ["Football", "Basketball", "Tennis", "Hockey sur glace", "
 
 MAX_INFO_MATCHES = 5
 MAX_POOL_SIMPLE_COMBO = 10
-CONFIDENCE_THRESHOLD = 0.70
-MAX_MANUAL_SINGLE = 5
-MAX_MANUAL_TOUT = 10
+MAX_POOL_MULTI_AUTO = 15
+MAX_MANUAL_GLOBAL = 20
+DEFAULT_CONFIDENCE_THRESHOLD = 0.70
+HIGH_ODDS_THRESHOLD = 15.0
+HIGH_ODDS_CONFIDENCE = 0.60
+
+def estimated_selections(cote_cible):
+    return max(2, round(math.log(cote_cible) / math.log(1.7)))
+
+def validity_rate(cote_cible):
+    return HIGH_ODDS_CONFIDENCE if cote_cible >= HIGH_ODDS_THRESHOLD else DEFAULT_CONFIDENCE_THRESHOLD
+
+def recommended_manual_matches(cote_cible):
+    sel = estimated_selections(cote_cible)
+    rate = validity_rate(cote_cible)
+    rec = math.ceil(sel / rate)
+    return min(MAX_MANUAL_GLOBAL, max(sel, rec))
 
 def determine_mode_params(cote_cible):
     if cote_cible <= 3.00:
-        return "simple_double", 2, 2, MAX_POOL_SIMPLE_COMBO
-    estimated = max(2, round(math.log(cote_cible) / math.log(1.7)))
-    if estimated <= 5:
-        return "combo_info", estimated, 7, MAX_POOL_SIMPLE_COMBO
-    return "multi", None, 7, 15
+        mode, coupon_max_size, jours, limit = "simple_double", 2, 2, MAX_POOL_SIMPLE_COMBO
+    else:
+        estimated = estimated_selections(cote_cible)
+        if estimated <= 5:
+            mode, coupon_max_size, jours, limit = "combo_info", estimated, 7, MAX_POOL_SIMPLE_COMBO
+        else:
+            mode, coupon_max_size, jours, limit = "multi", None, 7, MAX_POOL_MULTI_AUTO
+    threshold = validity_rate(cote_cible)
+    return mode, coupon_max_size, jours, limit, threshold
 
 def mode_badge():
     if st.session_state.get("manual_mode"):
@@ -409,20 +427,26 @@ if st.session_state.stage == "setup":
 
     nb_manual = None
     if not auto_mode:
+        rec = recommended_manual_matches(cote_cible)
+        rate_pct = int(validity_rate(cote_cible) * 100)
+        st.info(f"💡 Pour une cote cible de {cote_cible}, nous recommandons de calibrer le curseur sur environ **{rec} match(s)** pour maximiser vos chances (taux de fiabilité appliqué : {rate_pct}%).")
         st.warning("⚠️ Mode manuel - analyse basée sur vos données. Il n'y a pas de repêchage automatique : prévoyez une petite marge de matchs en plus si certains sont écartés en cours d'analyse.")
         if sport == "Tout":
-            nb_manual = st.slider("Nombre d'événements à entrer (multi-sports)", 2, MAX_MANUAL_TOUT, 5, key="setup_nb_tout")
+            default_val = min(max(rec, 2), MAX_MANUAL_GLOBAL)
+            nb_manual = st.slider("Nombre d'événements à entrer (multi-sports)", 2, MAX_MANUAL_GLOBAL, default_val, key="setup_nb_tout")
         else:
-            nb_manual = st.slider("Nombre de matchs à entrer", 1, MAX_MANUAL_SINGLE, 3, key="setup_nb_single")
+            default_val = min(max(rec, 1), MAX_MANUAL_GLOBAL)
+            nb_manual = st.slider("Nombre de matchs à entrer", 1, MAX_MANUAL_GLOBAL, default_val, key="setup_nb_single")
 
     if st.button("🚀 Lancer l'analyse"):
-        mode, coupon_max_size, jours, limit = determine_mode_params(cote_cible)
+        mode, coupon_max_size, jours, limit, threshold = determine_mode_params(cote_cible)
 
         st.session_state.mode = mode
         st.session_state.cote_cible = cote_cible
         st.session_state.coupon_max_size = coupon_max_size
         st.session_state.sport = sport
         st.session_state.competition = competition
+        st.session_state.confidence_threshold = threshold
 
         if auto_mode:
             st.session_state.manual_mode = False
@@ -562,9 +586,10 @@ if st.session_state.stage == "info_request":
 
 if st.session_state.stage == "options_ready":
     mode_badge()
-    threshold_pct = int(CONFIDENCE_THRESHOLD * 100)
+    threshold = st.session_state.get("confidence_threshold", DEFAULT_CONFIDENCE_THRESHOLD)
+    threshold_pct = int(threshold * 100)
     active = st.session_state.active
-    st.caption(f"🎫 Seuil de fiabilité minimum requis : {threshold_pct}% — {len(active)} match(s) à renseigner ci-dessous")
+    st.caption(f"🎫 Seuil de fiabilité minimum requis pour cette cote : {threshold_pct}% — {len(active)} match(s) à renseigner ci-dessous")
     display_aerated(st.session_state.human_text)
     st.info("Format attendu :\n\nM1: A=1.85 B=1.70 C=1.90 EXTRA: Over1.5=1.25,Over3.5=2.80\n\n(EXTRA optionnel. Merci de fournir une ligne pour CHAQUE match affiché ci-dessus.)")
     odds_input = st.text_area("💬 Cotes réelles trouvées chez votre bookmaker", key="odds_input_text")
@@ -591,7 +616,7 @@ if st.session_state.stage == "options_ready":
                 best["label"] = st.session_state.match_labels[mid]
                 best["mid"] = mid
                 best["all_results"] = all_results
-                if best["proba"] >= CONFIDENCE_THRESHOLD:
+                if best["proba"] >= threshold:
                     st.session_state.validated[mid] = best
                     recap[mid] = {"status": "Retenu", "market": best["market"], "proba": best["proba"], "cote": best["cote"], "label": best["label"]}
                 else:
@@ -609,9 +634,11 @@ if st.session_state.stage == "final":
     mode_badge()
     validated = st.session_state.validated
     recap = st.session_state.get("recap", {})
+    threshold = st.session_state.get("confidence_threshold", DEFAULT_CONFIDENCE_THRESHOLD)
+    threshold_pct = int(threshold * 100)
 
     if not validated:
-        st.error(f"😕 Aucun marché n'a atteint le seuil de fiabilité requis (≥ {int(CONFIDENCE_THRESHOLD*100)}%). Réessayez avec une autre compétition/cote.")
+        st.error(f"😕 Aucun marché n'a atteint le seuil de fiabilité requis (≥ {threshold_pct}%). Réessayez avec une autre compétition/cote.")
     else:
         vals = list(validated.values())
         max_size = st.session_state.coupon_max_size
