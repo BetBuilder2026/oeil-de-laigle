@@ -544,6 +544,16 @@ def find_missing_mids(text, required_mids):
         if mid not in found_mids:
             missing.append(mid)
     return missing
+def extract_info_by_mid(text):
+    info_by_mid = {}
+    if not text:
+        return info_by_mid
+    blocks = re.split(r"(M\d+)\s*:", text)
+    for i in range(1, len(blocks), 2):
+        mid = blocks[i]
+        content = blocks[i + 1] if i + 1 < len(blocks) else ""
+        info_by_mid[mid] = content.strip()
+    return info_by_mid
 
 def parse_cotes_input(text):
     result = {}
@@ -1146,12 +1156,9 @@ if st.session_state["page"] == "analysis":
             with st.spinner("Génération des options par l'Aigle..."):
                 results = {}
                 info_text = st.session_state.get("data_info_text", "")
+                info_by_mid = extract_info_by_mid(info_text)
                 for m in relevant_matches:
-                    match_info_lines = [
-                        line for line in info_text.split("\n")
-                        if line.strip().startswith(m["mid"] + ":")
-                    ]
-                    match_specific_info = "\n".join(match_info_lines)
+                    match_specific_info = info_by_mid.get(m["mid"], "")
                     results[m["mid"]] = generate_match_options(m, m.get("sport", st.session_state["sport"]), match_specific_info)
                 st.session_state["options_results"] = results
 
@@ -1163,14 +1170,11 @@ if st.session_state["page"] == "analysis":
             st.markdown(badge, unsafe_allow_html=True)
 
             info_text_full = st.session_state.get("data_info_text", "")
-            match_info_lines = [
-                line for line in info_text_full.split("\n")
-                if line.strip().startswith(mid + ":")
-            ]
-            if match_info_lines:
-                st.markdown("**📝 Informations transmises pour ce match :**")
-                for line in match_info_lines:
-                    st.caption(line.strip())
+            info_by_mid_display = extract_info_by_mid(info_text_full)
+            match_info_content = info_by_mid_display.get(mid, "")
+            if match_info_content:
+                with st.expander(f"📝 Informations transmises pour {mid}"):
+                    st.text(match_info_content)
 
             synthese = opts.get("synthese", "")
             if synthese:
@@ -1258,11 +1262,7 @@ if st.session_state["page"] == "analysis":
                 extra_for_mid = extra_parsed.get(mid, {})
                 if extra_for_mid:
                     info_text = st.session_state.get("data_info_text", "")
-                    match_info_lines = [
-                        line for line in info_text.split("\n")
-                        if line.strip().startswith(mid + ":")
-                    ]
-                    match_specific_info = "\n".join(match_info_lines)
+                    match_specific_info = extract_info_by_mid(info_text).get(mid, "")
                     for extra_name, extra_cote in extra_for_mid.items():
                         extra_prob = evaluate_extra_market(m, extra_name, match_specific_info)
                         candidates.append({
@@ -1314,6 +1314,7 @@ if st.session_state["page"] == "analysis":
                 record_progress("options_ready")
                 st.session_state["step"] = "final"
                 st.rerun()
+
 
     # --------------------------------------------------------
     # ETAPE 5 : RESULTAT FINAL
