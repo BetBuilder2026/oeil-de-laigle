@@ -1001,7 +1001,7 @@ if st.session_state["page"] == "analysis":
         sport_choice = st.session_state["sport"]
 
         matches_data = []
-         for i in range(nb_matches):
+        for i in range(nb_matches):
             mid = f"M{i+1}"
             st.markdown(f"**{mid}**")
 
