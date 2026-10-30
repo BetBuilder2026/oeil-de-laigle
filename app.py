@@ -527,7 +527,6 @@ ensure_default("data_info_text", "")
 ensure_default("data_cotes_text", "")
 ensure_default("match_pool", [])
 ensure_default("generated_options", {})
-ensure_default("sport_initialized", False)
 
 st.title("🦅 Œil de l'Aigle")
 
@@ -547,19 +546,21 @@ if st.session_state["stage"] == "setup":
     sport_index = sport_options.index(st.session_state["data_sport"]) if st.session_state["data_sport"] in sport_options else 0
     sport = st.selectbox("Sport", sport_options, index=sport_index, key="setup_sport_widget")
 
-    if not st.session_state["sport_initialized"]:
-        # Tout premier passage sur l'accueil (ou après "Nouvelle analyse") :
-        # on enregistre simplement le choix, aucune réinitialisation ni message.
-        st.session_state["data_sport"] = sport
-        st.session_state["sport_initialized"] = True
-        sport_changed = False
-    else:
-        sport_changed = sport != st.session_state["data_sport"]
-        st.session_state["data_sport"] = sport
+    sport_changed = sport != st.session_state["data_sport"]
+    st.session_state["data_sport"] = sport
 
-    if sport_changed:
+    # On ne considère qu'il y a "quelque chose à perdre" que si l'utilisateur a déjà
+    # atteint l'étape de saisie des matchs ou des infos complémentaires ou des cotes.
+    has_match_data = (
+        bool(st.session_state.get("data_manual_text", "").strip())
+        or bool(st.session_state.get("match_pool"))
+        or bool(st.session_state.get("data_info_text", "").strip())
+        or bool(st.session_state.get("data_cotes_text", "").strip())
+    )
+
+    if sport_changed and has_match_data:
         # Remise à zéro UNIQUEMENT du bloc des matchs et infos complémentaires,
-        # conformément au fonctionnement demandé : seul un changement de sport réinitialise.
+        # et uniquement s'il y avait réellement des données saisies à perdre.
         for widget_key in ("setup_competition_widget", "manual_text_widget", "info_text_widget", "cotes_text_widget"):
             st.session_state.pop(widget_key, None)
         st.session_state["data_competition"] = None
@@ -569,6 +570,11 @@ if st.session_state["stage"] == "setup":
         st.session_state["match_pool"] = []
         st.session_state["generated_options"] = {}
         st.info("Le sport a changé : les matchs précédemment saisis ont été réinitialisés.")
+    elif sport_changed and not has_match_data:
+        # Rien à perdre : on réinitialise juste discrètement la compétition liée à l'ancien
+        # sport, sans aucun message, puisqu'aucune donnée de match n'existe encore.
+        st.session_state.pop("setup_competition_widget", None)
+        st.session_state["data_competition"] = None
 
     competition = None
     if sport == "Football":
