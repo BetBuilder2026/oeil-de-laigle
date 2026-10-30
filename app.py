@@ -78,7 +78,7 @@ def get_sheet(sheet_name: str):
     return spreadsheet.worksheet(sheet_name)
 
 # ============================================================
-# AUTHENTIFICATION - FONCTIONS UTILISATEURS (existant, inchangé)
+# AUTHENTIFICATION - FONCTIONS UTILISATEURS
 # ============================================================
 def hash_password(password: str) -> str:
     return hashlib.sha256((password + PASSWORD_SALT).encode("utf-8")).hexdigest()
@@ -143,10 +143,10 @@ def clear_session_token(email: str):
     sheet.update_cell(idx, 5, "")
 
 # ============================================================
-# === ÉTAPE A — HISTORIQUE : FONCTIONS TECHNIQUES (NOUVEAU) ===
+# HISTORIQUE : FONCTIONS TECHNIQUES (Étape A - backend uniquement,
+# pas encore branché dans le flux ci-dessous, ce sera l'Étape B)
 # ============================================================
 def classify_period(dt: datetime) -> str:
-    """Classe une date dans une période d'affichage pour l'Historique (utilisé à l'Étape C)."""
     now = datetime.now()
     today = now.date()
     d = dt.date()
@@ -161,8 +161,6 @@ def classify_period(dt: datetime) -> str:
     return "Plus ancien"
 
 def save_history_entry(user_email: str, stage: str, sport: str, cote_cible, session_data: dict):
-    """Ajoute une entrée d'historique pour l'utilisateur. Nettoie automatiquement les entrées
-    excédentaires pour ne garder que les MAX_HISTORY_PER_USER plus récentes."""
     try:
         sheet = get_sheet(HISTORY_SHEET_NAME)
         safe_data = {}
@@ -180,7 +178,6 @@ def save_history_entry(user_email: str, stage: str, sport: str, cote_cible, sess
         sheet.append_row(row)
         _prune_old_history(user_email)
     except Exception:
-        # On ne casse jamais le flux principal de l'app si la sauvegarde d'historique échoue
         pass
 
 def _prune_old_history(user_email: str):
@@ -201,9 +198,6 @@ def _prune_old_history(user_email: str):
     delete_history_rows(rows_to_delete)
 
 def get_user_history(user_email: str):
-    """Retourne la liste des entrées d'historique d'un utilisateur, triées de la plus récente
-    à la plus ancienne. Chaque entrée est un dict avec row_index, timestamp (datetime), stage,
-    sport, cote_cible, session_data (dict)."""
     sheet = get_sheet(HISTORY_SHEET_NAME)
     values = sheet.get_all_values()
     entries = []
@@ -234,7 +228,6 @@ def get_user_history(user_email: str):
     return entries
 
 def delete_history_rows(row_indices: list):
-    """Supprime des lignes précises de l'onglet History (par numéro de ligne réel dans la feuille)."""
     if not row_indices:
         return
     sheet = get_sheet(HISTORY_SHEET_NAME)
@@ -245,7 +238,6 @@ def delete_history_rows(row_indices: list):
             pass
 
 def delete_all_history(user_email: str):
-    """Supprime toutes les entrées d'historique d'un utilisateur."""
     entries = get_user_history(user_email)
     row_indices = [e["row_index"] for e in entries]
     delete_history_rows(row_indices)
@@ -296,40 +288,39 @@ FOOTBALL_COMPETITIONS = {
 
 def fetch_football_matches(competition_code, date_from, date_to):
     headers = {"X-Auth-Token": st.secrets["FOOTBALL_API_KEY"]}
-    if competition_code == "TOUT":
-        results = []
-        for code in FOOTBALL_COMPETITIONS.values():
-            try:
-                url = f"https://api.football-data.org/v4/competitions/{code}/matches"
-                params = {"dateFrom": date_from, "dateTo": date_to}
-                r = requests.get(url, headers=headers, params=params, timeout=10)
-                if r.status_code == 200:
-                    results.extend(r.json().get("matches", []))
-            except requests.RequestException:
-                continue
-        return results
-    else:
+    results = []
+    codes = list(FOOTBALL_COMPETITIONS.values()) if competition_code == "TOUT" else [competition_code]
+    for code in codes:
         try:
-            url = f"https://api.football-data.org/v4/competitions/{competition_code}/matches"
+            url = f"https://api.football-data.org/v4/competitions/{code}/matches"
             params = {"dateFrom": date_from, "dateTo": date_to}
             r = requests.get(url, headers=headers, params=params, timeout=10)
             if r.status_code == 200:
-                return r.json().get("matches", [])
+                for m in r.json().get("matches", []):
+                    results.append({
+                        "label": f"{m['homeTeam']['name']} vs {m['awayTeam']['name']} ({m['utcDate'][:10]})",
+                        "raw": m
+                    })
         except requests.RequestException:
-            pass
-        return []
+            continue
+    return results
 
 def fetch_nba_matches(date_from, date_to):
     headers = {"Authorization": st.secrets["BASKETBALL_API_KEY"]}
+    results = []
     try:
         url = "https://api.balldontlie.io/v1/games"
         params = {"start_date": date_from, "end_date": date_to, "per_page": 25}
         r = requests.get(url, headers=headers, params=params, timeout=10)
         if r.status_code == 200:
-            return r.json().get("data", [])
+            for g in r.json().get("data", []):
+                home = g.get("home_team", {}).get("full_name", "Équipe A")
+                away = g.get("visitor_team", {}).get("full_name", "Équipe B")
+                date = g.get("date", "")[:10]
+                results.append({"label": f"{home} vs {away} ({date})", "raw": g})
     except requests.RequestException:
         pass
-    return []
+    return results
 
 # ============================================================
 # IA GEMINI - CONFIGURATION ET PROMPTS
@@ -343,9 +334,12 @@ NO_MARKDOWN_BASE = (
 )
 
 def call_gemini(prompt: str) -> str:
-    model = genai.GenerativeModel(GEMINI_MODEL)
-    response = model.generate_content(prompt)
-    return response.text or ""
+    try:
+        model = genai.GenerativeModel(GEMINI_MODEL)
+        response = model.generate_content(prompt)
+        return response.text or ""
+    except Exception as e:
+        return f"[Erreur IA temporaire: {e}]"
 
 MARKETS_BY_SPORT = {
     "Football": ["1X2", "Double Chance", "BTTS", "Over/Under buts (1.5/2.5/3.5)", "Total individuel équipe", "Handicap asiatique simple"],
@@ -356,6 +350,92 @@ MARKETS_BY_SPORT = {
 }
 
 MID_REGEX = re.compile(r"(M\d+)\s*:")
+
+def build_options_prompt(mid, label, sport, info_text, is_manual):
+    base_markets = MARKETS_BY_SPORT.get(sport, MARKETS_BY_SPORT["Football"])
+    data_note = (
+        "Aucune donnée vérifiée via API n'est disponible pour ce match (mode manuel) : "
+        "base-toi uniquement sur les informations complémentaires fournies ci-dessous par l'utilisateur, "
+        "sans inventer de statistiques précises."
+        if is_manual else
+        "Ce match provient d'une base de données sportive réelle. Base-toi sur les informations factuelles "
+        "disponibles (forme, contexte de compétition) sans inventer de statistiques précises non vérifiables."
+    )
+    info_block = f"Informations complémentaires fournies par l'utilisateur : {info_text}" if info_text else "Aucune information complémentaire fournie."
+    return (
+        NO_MARKDOWN_BASE +
+        f"Pour le match {label} ({sport}), propose EXACTEMENT 3 options de marché parmi celles-ci : "
+        f"{', '.join(base_markets)}. {data_note} {info_block} "
+        "Rédige d'abord un court texte explicatif (3-4 phrases) sur l'état de ce match et pourquoi ces 3 options "
+        "sont pertinentes. Ensuite, écris exactement la mention ###DATA_BLOCK### suivie d'un JSON valide de la "
+        "forme [{\"option\":\"A\",\"marche\":\"...\",\"probabilite\":0.58}, {\"option\":\"B\",...}, {\"option\":\"C\",...}] "
+        "avec des probabilités entre 0 et 1 qui reflètent ta confiance réelle, sans inventer de précision excessive."
+    )
+
+def parse_options_response(raw_text):
+    if "###DATA_BLOCK###" not in raw_text:
+        return raw_text.strip(), []
+    narrative, data_part = raw_text.split("###DATA_BLOCK###", 1)
+    data_part = data_part.strip()
+    data_part = re.sub(r"```json|```", "", data_part).strip()
+    try:
+        options = json.loads(data_part)
+    except json.JSONDecodeError:
+        options = []
+    return narrative.strip(), options
+
+def build_reliability_prompt(matches_labels, sport):
+    joined = "; ".join(matches_labels)
+    return (
+        NO_MARKDOWN_BASE +
+        f"Voici une liste de matchs de {sport} : {joined}. "
+        "Évalue pour chacun un score de fiabilité de 0 à 100 représentant à quel point on dispose "
+        "d'informations suffisamment claires pour analyser ce match sérieusement (forme des équipes, enjeu, "
+        "contexte de compétition), sans texte explicatif. "
+        "Réponds uniquement avec la mention ###DATA_BLOCK### suivie d'un JSON de la forme "
+        "[{\"label\":\"...\",\"score\":75}, ...] dans le même ordre que la liste fournie."
+    )
+
+def rank_matches_by_reliability(matches, sport):
+    labels = [m["label"] for m in matches]
+    raw = call_gemini(build_reliability_prompt(labels, sport))
+    _, data = parse_options_response(raw)
+    scores = {}
+    for d in data:
+        scores[d.get("label")] = d.get("score", 50)
+    for m in matches:
+        m["reliability"] = scores.get(m["label"], 50)
+    return sorted(matches, key=lambda m: m["reliability"], reverse=True)
+
+def build_extra_eval_prompt(label, sport, extra_name, info_text):
+    info_block = f"Informations complémentaires : {info_text}" if info_text else ""
+    return (
+        NO_MARKDOWN_BASE +
+        f"Pour le match {label} ({sport}), évalue le marché personnalisé suivant proposé par l'utilisateur : "
+        f"{extra_name.replace('_', ' ')}. {info_block} "
+        "Donne une probabilité réaliste de réalisation de ce scénario, sans texte explicatif. "
+        "Réponds uniquement avec ###DATA_BLOCK### suivie d'un JSON de la forme {\"probabilite\":0.45}."
+    )
+
+def evaluate_extra_market(label, sport, extra_name, info_text):
+    raw = call_gemini(build_extra_eval_prompt(label, sport, extra_name, info_text))
+    _, data = parse_options_response(raw)
+    if isinstance(data, dict):
+        return data.get("probabilite", 0.5)
+    return 0.5
+
+def build_justification_prompt(coupon_matches, cote_cible, cote_obtenue):
+    details = []
+    for m in coupon_matches:
+        details.append(f"{m['label']} : option retenue {m['selected_market']} (probabilité estimée {m['selected_probability']:.0%}, cote {m['selected_odds']})")
+    details_text = " ; ".join(details)
+    return (
+        NO_MARKDOWN_BASE +
+        f"Voici le coupon final retenu pour une cote cible de {cote_cible} (cote obtenue : {cote_obtenue:.2f}) : {details_text}. "
+        "Rédige un texte fluide de 3 à 4 phrases expliquant pourquoi ces options retenues représentent le scénario "
+        "le plus probable par rapport aux autres options qui avaient été évaluées pour ces mêmes matchs, "
+        "sans accolades, sans JSON, sans liste à puces."
+    )
 
 # ============================================================
 # COOKIE MANAGER + PORTAIL DE CONNEXION
@@ -378,6 +458,7 @@ if not st.session_state["logged_in"]:
 
 if not st.session_state["logged_in"]:
     st.title("🦅 Œil de l'Aigle")
+    st.caption("L'algorithme qui analyse les vraies données sportives pour éclairer tes choix de paris.")
     st.subheader("Connexion")
 
     mode_login = st.radio("", ["Se connecter", "Créer un compte"], horizontal=True, label_visibility="collapsed")
@@ -434,10 +515,16 @@ if "stage" not in st.session_state:
 st.title("🦅 Œil de l'Aigle")
 
 # ============================================================
-# ETAPE: SETUP
+# ETAPE: SETUP (page d'accueil)
 # ============================================================
 if st.session_state["stage"] == "setup":
-    st.subheader("Configuration de ton analyse")
+    st.markdown("### Vois le match comme un aigle voit sa proie.")
+    st.write(
+        "Œil de l'Aigle analyse de vraies données sportives — championnats de football et NBA en direct — "
+        "pour identifier les scénarios les plus probables selon la cote que tu vises. Choisis ton sport, "
+        "indique ta cote cible, et laisse l'algorithme sélectionner les matchs et les marchés les plus fiables."
+    )
+    st.write("")
 
     sport = st.selectbox(
         "Sport",
@@ -453,13 +540,18 @@ if st.session_state["stage"] == "setup":
 
     cote_cible = st.number_input("Cote cible", min_value=1.01, step=0.01, key="setup_cote_cible")
 
-    is_auto = sport == "Football" and competition != "Tout" or (sport == "Basketball" and competition == "NBA (auto)")
-    is_manual_needed = sport == "Tout" or sport in ["Tennis", "Hockey sur glace", "Football américain"] or (sport == "Football" and competition == "Tout") or (sport == "Basketball" and competition == "Euroligue (manuel)")
+    is_auto = (sport == "Football" and competition != "Tout") or (sport == "Basketball" and competition == "NBA (auto)")
+    is_manual_needed = not is_auto
+
+    if is_auto:
+        st.success("✅ Données vérifiées — matchs sélectionnés automatiquement depuis une base de données réelle.")
+    else:
+        st.warning("⚠️ Mode manuel — tu devras saisir toi-même les matchs à analyser.")
 
     nb_tout = None
     if is_manual_needed and cote_cible:
         reco = recommended_manual_matches(cote_cible)
-        st.caption(f"Nombre de matchs recommandé pour cette cote : {reco}")
+        st.caption(f"Nombre de matchs recommandé pour cette cote : {reco} (plafond {MAX_MANUAL_GLOBAL})")
         nb_tout = st.slider("Nombre de matchs à inclure", min_value=1, max_value=MAX_MANUAL_GLOBAL, value=reco, key="setup_nb_tout")
 
     if st.button("🚀 Lancer l'analyse", disabled=not cote_cible):
@@ -473,48 +565,150 @@ if st.session_state["stage"] == "setup":
         st.session_state["competition"] = competition
         st.session_state["cote_cible"] = cote_cible
         st.session_state["nb_tout"] = nb_tout
-        st.session_state["is_auto"] = is_auto and sport != "Tout"
-        st.session_state["stage"] = "manual_entry" if not st.session_state["is_auto"] else "info_request"
+        st.session_state["is_auto"] = is_auto
 
-        # Sauvegarde Historique (branchement prévu à l'Étape B - pas encore actif ici)
+        if is_auto:
+            date_from = datetime.now().strftime("%Y-%m-%d")
+            date_to = (datetime.now() + timedelta(days=jours)).strftime("%Y-%m-%d")
+            if sport == "Football":
+                code = FOOTBALL_COMPETITIONS[competition]
+                fetched = fetch_football_matches(code, date_from, date_to)
+            else:
+                fetched = fetch_nba_matches(date_from, date_to)
+            fetched = fetched[:limit]
+            pool = []
+            for i, m in enumerate(fetched, start=1):
+                pool.append({"mid": f"M{i}", "label": m["label"], "info": "", "kept": True})
+
+            if mode in ("simple_double", "combo_info") and len(pool) > MAX_INFO_MATCHES:
+                ranked = rank_matches_by_reliability(pool, sport)
+                for i, m in enumerate(ranked):
+                    m["kept"] = i < MAX_INFO_MATCHES
+                if mode == "simple_double":
+                    pool = [m for m in ranked if m["kept"]]
+                else:
+                    pool = ranked
+
+            st.session_state["match_pool"] = pool
+            st.session_state["stage"] = "info_request" if mode != "multi" else "options_ready"
+        else:
+            st.session_state["stage"] = "manual_entry"
         st.rerun()
 
 # ============================================================
-# ETAPE: MANUAL_ENTRY (saisie manuelle des matchs)
+# ETAPE: MANUAL_ENTRY (saisie manuelle des matchs - mode manuel uniquement)
 # ============================================================
 elif st.session_state["stage"] == "manual_entry":
     st.subheader("Saisie manuelle des matchs")
-    st.warning("⚠️ Mode manuel — vérifie toi-même les informations des matchs saisis.")
+    st.warning("⚠️ Mode manuel — vérifie toi-même les informations des matchs saisis, aucune donnée API n'est utilisée.")
 
     if st.button("⬅️ Retour à l'accueil"):
         st.session_state["stage"] = "setup"
         st.rerun()
 
     nb = st.session_state.get("nb_tout", 5)
-    st.caption(f"Saisis jusqu'à {nb} matchs au format: M1: EquipeA vs EquipeB - Date")
-    manual_text = st.text_area("Matchs", height=200, key="manual_matches_text")
+    sport_label = st.session_state.get("sport", "")
+    st.caption(
+        f"Saisis jusqu'à {nb} matchs, un par ligne, au format : M1: Équipe A vs Équipe B - Date"
+        + (" - Sport" if sport_label == "Tout" else "")
+    )
+    manual_text = st.text_area("Liste des matchs", height=220, key="manual_matches_text")
 
-    if st.button("Valider les matchs"):
-        st.session_state["manual_matches_text_saved"] = manual_text
+    if st.button("Valider les matchs", disabled=not manual_text.strip()):
+        mids_found = MID_REGEX.findall(manual_text)
+        lines = manual_text.split("\n")
+        pool = []
+        for mid in mids_found:
+            for line in lines:
+                if line.strip().startswith(mid + ":"):
+                    pool.append({"mid": mid, "label": line.strip()[len(mid) + 1:].strip(), "info": "", "kept": True})
+                    break
+        st.session_state["match_pool"] = pool
         st.session_state["stage"] = "info_request"
         st.rerun()
 
 # ============================================================
-# ETAPE: INFO_REQUEST (options + saisie des cotes)
+# ETAPE: INFO_REQUEST (demande d'infos complémentaires - une seule vague)
 # ============================================================
 elif st.session_state["stage"] == "info_request":
-    st.subheader("Options de marché et saisie des cotes")
+    st.subheader("Informations complémentaires (facultatif mais recommandé)")
 
     if st.button("⬅️ Retour à l'accueil"):
         st.session_state["stage"] = "setup"
         st.rerun()
 
-    st.info("Pour chaque match (M1, M2, ...), indique les cotes de ton bookmaker au format : M1: A=1.85 B=1.70 C=1.90")
-    st.caption("Tu peux ajouter des marchés personnalisés : EXTRA: Nom_du_marché=cote,Autre_marche=cote")
+    pool = st.session_state.get("match_pool", [])
+    active_matches = [m for m in pool if m.get("kept", True)]
+
+    if not active_matches:
+        st.warning("Aucun match actif trouvé. Reviens à l'accueil pour recommencer.")
+    else:
+        st.write(
+            "Tu peux enrichir l'analyse en collant ici des informations trouvées ailleurs (blessures, forme du "
+            "moment, compositions probables, météo, etc.) via le site de ton choix (ex: Score24, Flashscore). "
+            "Cette étape n'aura lieu qu'une seule fois."
+        )
+        for m in active_matches:
+            st.caption(f"{m['mid']} — {m['label']}")
+        info_text = st.text_area(
+            "Colle tes informations complémentaires au format : M1: texte libre / M2: texte libre",
+            height=180, key="info_request_text"
+        )
+
+        if st.button("Continuer vers les options de marché ➡️"):
+            info_map = {}
+            for mid in [m["mid"] for m in active_matches]:
+                match_found = re.search(rf"{mid}\s*:(.*?)(?=M\d+\s*:|$)", info_text or "", flags=re.DOTALL)
+                info_map[mid] = match_found.group(1).strip() if match_found else ""
+            for m in pool:
+                if m["mid"] in info_map:
+                    m["info"] = info_map[m["mid"]]
+            st.session_state["match_pool"] = pool
+            st.session_state["stage"] = "options_ready"
+            st.rerun()
+
+# ============================================================
+# ETAPE: OPTIONS_READY (3 options IA par match + saisie des cotes réelles)
+# ============================================================
+elif st.session_state["stage"] == "options_ready":
+    st.subheader("Options de marché et saisie des cotes")
+
+    sport = st.session_state.get("sport", "Football")
+    is_auto = st.session_state.get("is_auto", False)
+    pool = st.session_state.get("match_pool", [])
+
+    if is_auto:
+        st.success("✅ Données vérifiées")
+    else:
+        st.warning("⚠️ Mode manuel")
+
+    if "generated_options" not in st.session_state:
+        st.session_state["generated_options"] = {}
+
+    with st.spinner("Génération des options de marché par l'IA (peut prendre quelques minutes)..."):
+        for m in pool:
+            if m["mid"] not in st.session_state["generated_options"]:
+                match_sport = sport if sport != "Tout" else "Football"
+                raw = call_gemini(build_options_prompt(m["mid"], m["label"], match_sport, m.get("info", ""), not is_auto))
+                narrative, options = parse_options_response(raw)
+                st.session_state["generated_options"][m["mid"]] = {
+                    "narrative": narrative, "options": options, "label": m["label"], "sport": match_sport
+                }
+
+    for m in pool:
+        data = st.session_state["generated_options"].get(m["mid"], {})
+        st.markdown(f"**{m['mid']} — {data.get('label', m['label'])}**")
+        display_aerated(data.get("narrative", ""))
+        for opt in data.get("options", []):
+            st.write(f"Option {opt.get('option', '?')} : {opt.get('marche', '?')} (probabilité estimée {opt.get('probabilite', 0):.0%})")
+        st.write("---")
+
+    st.info("Indique les cotes réelles de ton bookmaker pour chaque match, au format : M1: A=1.85 B=1.70 C=1.90")
+    st.caption("Marchés personnalisés optionnels : EXTRA: Nom_du_marche=cote,Autre_marche=cote (sans espace ni virgule dans les noms)")
 
     cotes_text = st.text_area("Cotes", height=200, key="cotes_input")
 
-    required_mids = set(MID_REGEX.findall(st.session_state.get("manual_matches_text_saved", "") or ""))
+    required_mids = set(m["mid"] for m in pool)
     provided_mids = set(MID_REGEX.findall(cotes_text))
     missing = required_mids - provided_mids
 
@@ -522,28 +716,131 @@ elif st.session_state["stage"] == "info_request":
         st.warning(f"Il manque les cotes pour : {', '.join(sorted(missing))}")
 
     if st.button("✅ Analyser les cotes et finaliser", disabled=bool(missing) or not cotes_text.strip()):
-        st.session_state["stage"] = "options_ready"
-        st.rerun()
-
-# ============================================================
-# ETAPE: OPTIONS_READY
-# ============================================================
-elif st.session_state["stage"] == "options_ready":
-    st.subheader("Analyse en cours...")
-    st.write("Les options sont en cours de traitement par l'IA.")
-    if st.button("Voir le résultat final"):
+        st.session_state["cotes_text_saved"] = cotes_text
         st.session_state["stage"] = "final"
         st.rerun()
 
 # ============================================================
-# ETAPE: FINAL
+# ETAPE: FINAL (sélection combinatoire + justification + récapitulatif)
 # ============================================================
 elif st.session_state["stage"] == "final":
     st.subheader("Coupon final")
-    st.success("Résultat de l'analyse.")
+
+    pool = st.session_state.get("match_pool", [])
+    generated = st.session_state.get("generated_options", {})
+    cotes_text = st.session_state.get("cotes_text_saved", "")
+    threshold = st.session_state.get("threshold", 0.70)
+    coupon_max_size = st.session_state.get("coupon_max_size") or 5
+    cote_cible = st.session_state.get("cote_cible", 1.5)
+    sport = st.session_state.get("sport", "Football")
+
+    match_odds_blocks = re.split(r"(M\d+)\s*:", cotes_text)
+    odds_map = {}
+    for i in range(1, len(match_odds_blocks), 2):
+        mid = match_odds_blocks[i]
+        block = match_odds_blocks[i + 1] if i + 1 < len(match_odds_blocks) else ""
+        odds_map[mid] = block.strip()
+
+    results = []
+    for m in pool:
+        mid = m["mid"]
+        data = generated.get(mid, {})
+        options = data.get("options", [])
+        block = odds_map.get(mid, "")
+
+        if not block:
+            results.append({"mid": mid, "label": m["label"], "status": "Aucune cote fournie"})
+            continue
+
+        candidates = []
+        for letter_match in re.finditer(r"([A-Z])\s*=\s*([\d.]+)", block):
+            letter, odds_val = letter_match.group(1), float(letter_match.group(2))
+            opt = next((o for o in options if o.get("option") == letter), None)
+            if opt:
+                candidates.append({"market": opt.get("marche", letter), "probability": opt.get("probabilite", 0), "odds": odds_val})
+
+        extra_match = re.search(r"EXTRA\s*:\s*(.+)", block)
+        if extra_match:
+            extras = extra_match.group(1).split(",")
+            for extra in extras:
+                if "=" in extra:
+                    name, val = extra.split("=", 1)
+                    name = name.strip()
+                    try:
+                        odds_val = float(val.strip())
+                    except ValueError:
+                        continue
+                    prob = evaluate_extra_market(m["label"], data.get("sport", sport), name, m.get("info", ""))
+                    candidates.append({"market": name.replace("_", " "), "probability": prob, "odds": odds_val})
+
+        if not candidates:
+            results.append({"mid": mid, "label": m["label"], "status": "Aucune option exploitable"})
+            continue
+
+        best = max(candidates, key=lambda c: c["probability"])
+        if best["probability"] >= threshold:
+            results.append({
+                "mid": mid, "label": m["label"], "status": "Retenu (en attente)",
+                "selected_market": best["market"], "selected_probability": best["probability"],
+                "selected_odds": best["odds"]
+            })
+        else:
+            results.append({
+                "mid": mid, "label": m["label"], "status": "Écarté",
+                "selected_market": best["market"], "selected_probability": best["probability"],
+                "selected_odds": best["odds"]
+            })
+
+    validated = [r for r in results if r["status"] == "Retenu (en attente)"]
+
+    best_combo = None
+    best_diff = None
+    if validated:
+        max_size = min(coupon_max_size, len(validated))
+        for size in range(1, max_size + 1):
+            for combo in itertools.combinations(validated, size):
+                product = 1.0
+                for c in combo:
+                    product *= c["selected_odds"]
+                diff = abs(product - cote_cible)
+                if best_diff is None or diff < best_diff:
+                    best_diff = diff
+                    best_combo = combo
+
+    if best_combo:
+        coupon_odds = 1.0
+        for c in best_combo:
+            coupon_odds *= c["selected_odds"]
+            for r in results:
+                if r["mid"] == c["mid"]:
+                    r["status"] = "Retenu"
+
+        for r in results:
+            if r["status"] == "Retenu (en attente)":
+                r["status"] = "Écarté"
+
+        st.success(f"Coupon final — cote obtenue : {coupon_odds:.2f} (cible : {cote_cible})")
+        for c in best_combo:
+            st.write(f"{c['mid']} — {c['label']} : {c['market']} (probabilité {c['selected_probability']:.0%}, cote {c['selected_odds']})")
+
+        with st.spinner("Rédaction de la justification..."):
+            just_raw = call_gemini(build_justification_prompt(best_combo, cote_cible, coupon_odds))
+            just_clean = clean_justification_text(just_raw)
+        st.write("")
+        display_aerated(just_clean)
+    else:
+        st.error(
+            f"Aucun match n'atteint le seuil de fiabilité requis ({threshold:.0%}). "
+            "Aucun coupon ne peut être proposé avec les cotes fournies. Essaie avec plus de matchs ou des "
+            "informations complémentaires plus précises."
+        )
 
     with st.expander("📋 Récapitulatif complet de tous les matchs testés"):
-        st.write("Détail de chaque match : cote reçue, probabilité, marché, statut.")
+        for r in results:
+            if "selected_market" in r:
+                st.write(f"{r['mid']} — {r['label']} : {r['selected_market']}, probabilité {r['selected_probability']:.0%}, cote {r['selected_odds']} — statut : {r['status']}")
+            else:
+                st.write(f"{r['mid']} — {r['label']} : statut — {r['status']}")
 
     if st.button("🔄 Nouvelle analyse"):
         for k in list(st.session_state.keys()):
