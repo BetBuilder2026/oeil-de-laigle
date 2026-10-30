@@ -648,7 +648,8 @@ def find_best_combination(validated_matches, cote_cible, max_size):
                 best_diff = diff
                 best = combo
     return best, best_diff
-    cookies = EncryptedCookieManager(prefix="oeildelaigle_", password=st.secrets["COOKIE_PASSWORD"])
+    
+cookies = EncryptedCookieManager(prefix="oeildelaigle_", password=st.secrets["COOKIE_PASSWORD"])
 if not cookies.ready():
     st.stop()
 
