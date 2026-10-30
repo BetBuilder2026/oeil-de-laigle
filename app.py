@@ -143,8 +143,7 @@ def clear_session_token(email: str):
     sheet.update_cell(idx, 5, "")
 
 # ============================================================
-# HISTORIQUE : FONCTIONS TECHNIQUES (Étape A - backend, pas encore
-# branché automatiquement dans le flux, ce sera l'Étape B)
+# HISTORIQUE : FONCTIONS TECHNIQUES
 # ============================================================
 def classify_period(dt: datetime) -> str:
     now = datetime.now()
@@ -161,6 +160,8 @@ def classify_period(dt: datetime) -> str:
     return "Plus ancien"
 
 def save_history_entry(user_email: str, stage: str, sport: str, cote_cible, session_data: dict):
+    """Ajoute une entrée d'historique pour l'utilisateur. N'interrompt jamais le flux principal
+    de l'app en cas d'erreur (ex: Google Sheets temporairement indisponible)."""
     try:
         sheet = get_sheet(HISTORY_SHEET_NAME)
         safe_data = {}
@@ -438,6 +439,43 @@ def build_justification_prompt(coupon_matches, cote_cible, cote_obtenue):
     )
 
 # ============================================================
+# HISTORIQUE : INSTANTANE DE LA SESSION EN COURS
+# ============================================================
+def snapshot_session_data() -> dict:
+    """Rassemble toutes les données nécessaires pour reprendre une analyse plus tard."""
+    return {
+        "analysis_id": st.session_state.get("current_analysis_id"),
+        "mode": st.session_state.get("mode"),
+        "coupon_max_size": st.session_state.get("coupon_max_size"),
+        "jours_fenetre": st.session_state.get("jours_fenetre"),
+        "pool_limit": st.session_state.get("pool_limit"),
+        "threshold": st.session_state.get("threshold"),
+        "competition": st.session_state.get("competition"),
+        "cote_cible": st.session_state.get("cote_cible"),
+        "nb_tout": st.session_state.get("nb_tout"),
+        "is_auto": st.session_state.get("is_auto"),
+        "match_pool": st.session_state.get("match_pool"),
+        "generated_options": st.session_state.get("generated_options"),
+        "data_manual_text": st.session_state.get("data_manual_text"),
+        "data_info_text": st.session_state.get("data_info_text"),
+        "data_cotes_text": st.session_state.get("data_cotes_text"),
+        "cotes_text_saved": st.session_state.get("cotes_text_saved"),
+    }
+
+def record_progress(stage: str):
+    """Enregistre discrètement la progression actuelle dans l'Historique."""
+    user_email = st.session_state.get("user_email")
+    if not user_email:
+        return
+    save_history_entry(
+        user_email,
+        stage,
+        st.session_state.get("sport", ""),
+        st.session_state.get("cote_cible"),
+        snapshot_session_data()
+    )
+
+# ============================================================
 # COOKIE MANAGER + PORTAIL DE CONNEXION
 # ============================================================
 cookies = EncryptedCookieManager(prefix="oeildelaigle_", password=st.secrets["COOKIE_PASSWORD"])
@@ -516,8 +554,6 @@ def ensure_default(key, default):
     if key not in st.session_state:
         st.session_state[key] = default
 
-# Stockage persistant indépendant du cycle de vie des widgets Streamlit,
-# pour éviter que les champs se vident lors des allers-retours entre pages.
 ensure_default("data_sport", "Football")
 ensure_default("data_competition", None)
 ensure_default("data_cote_cible", 1.50)
@@ -527,6 +563,7 @@ ensure_default("data_info_text", "")
 ensure_default("data_cotes_text", "")
 ensure_default("match_pool", [])
 ensure_default("generated_options", {})
+ensure_default("current_analysis_id", None)
 
 st.title("🦅 Œil de l'Aigle")
 
@@ -549,8 +586,6 @@ if st.session_state["stage"] == "setup":
     sport_changed = sport != st.session_state["data_sport"]
     st.session_state["data_sport"] = sport
 
-    # On ne considère qu'il y a "quelque chose à perdre" que si l'utilisateur a déjà
-    # atteint l'étape de saisie des matchs ou des infos complémentaires ou des cotes.
     has_match_data = (
         bool(st.session_state.get("data_manual_text", "").strip())
         or bool(st.session_state.get("match_pool"))
@@ -559,8 +594,6 @@ if st.session_state["stage"] == "setup":
     )
 
     if sport_changed and has_match_data:
-        # Remise à zéro UNIQUEMENT du bloc des matchs et infos complémentaires,
-        # et uniquement s'il y avait réellement des données saisies à perdre.
         for widget_key in ("setup_competition_widget", "manual_text_widget", "info_text_widget", "cotes_text_widget"):
             st.session_state.pop(widget_key, None)
         st.session_state["data_competition"] = None
@@ -571,8 +604,6 @@ if st.session_state["stage"] == "setup":
         st.session_state["generated_options"] = {}
         st.info("Le sport a changé : les matchs précédemment saisis ont été réinitialisés.")
     elif sport_changed and not has_match_data:
-        # Rien à perdre : on réinitialise juste discrètement la compétition liée à l'ancien
-        # sport, sans aucun message, puisqu'aucune donnée de match n'existe encore.
         st.session_state.pop("setup_competition_widget", None)
         st.session_state["data_competition"] = None
 
@@ -628,6 +659,7 @@ if st.session_state["stage"] == "setup":
         st.session_state["cote_cible"] = cote_cible
         st.session_state["nb_tout"] = nb_tout
         st.session_state["is_auto"] = is_auto
+        st.session_state["current_analysis_id"] = secrets_lib.token_hex(8)
 
         if is_auto:
             date_from = datetime.now().strftime("%Y-%m-%d")
@@ -655,6 +687,8 @@ if st.session_state["stage"] == "setup":
             st.session_state["stage"] = "info_request" if mode != "multi" else "options_ready"
         else:
             st.session_state["stage"] = "manual_entry"
+
+        record_progress(st.session_state["stage"])
         st.rerun()
 
 # ============================================================
@@ -696,6 +730,7 @@ elif st.session_state["stage"] == "manual_entry":
                     break
         st.session_state["match_pool"] = pool
         st.session_state["stage"] = "info_request"
+        record_progress("info_request")
         st.rerun()
 
 # ============================================================
@@ -740,6 +775,7 @@ elif st.session_state["stage"] == "info_request":
                     m["info"] = info_map[m["mid"]]
             st.session_state["match_pool"] = pool
             st.session_state["stage"] = "options_ready"
+            record_progress("options_ready")
             st.rerun()
 
 # ============================================================
@@ -796,6 +832,7 @@ elif st.session_state["stage"] == "options_ready":
     if st.button("✅ Analyser les cotes et finaliser", disabled=bool(missing) or not cotes_text.strip()):
         st.session_state["cotes_text_saved"] = cotes_text
         st.session_state["stage"] = "final"
+        record_progress("final")
         st.rerun()
 
 # ============================================================
