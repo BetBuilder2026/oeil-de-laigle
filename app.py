@@ -5,11 +5,14 @@ import time
 import re
 import math
 import itertools
+import hashlib
+import secrets as secrets_lib
 from datetime import datetime, timedelta
+import gspread
+from google.oauth2.service_account import Credentials
+from streamlit_cookies_manager import EncryptedCookieManager
 
 st.set_page_config(page_title="Œil de l'Aigle 🦅", page_icon="🦅", layout="centered")
-st.title("🦅 L'Œil de l'Aigle")
-st.caption("Analyse sportive basée sur données réelles et scénarios les plus probables")
 
 st.markdown("""
 <style>
@@ -22,6 +25,133 @@ p, li, div { font-size: 16px !important; line-height: 1.8 !important; }
 
 def display_aerated(text):
     st.markdown(f"<div style='white-space: pre-line; line-height: 1.9;'>{text}</div>", unsafe_allow_html=True)
+
+# ============== COOKIES (mémorisation de connexion) ==============
+cookies = EncryptedCookieManager(prefix="oeildelaigle_", password=st.secrets["COOKIE_PASSWORD"])
+if not cookies.ready():
+    st.stop()
+
+# ============== CONNEXION GOOGLE SHEETS ==============
+SHEETS_SCOPES = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+
+@st.cache_resource
+def get_gspread_client():
+    creds_dict = dict(st.secrets["gcp_service_account"])
+    creds = Credentials.from_service_account_info(creds_dict, scopes=SHEETS_SCOPES)
+    return gspread.authorize(creds)
+
+def get_sheet(sheet_name):
+    client = get_gspread_client()
+    sh = client.open_by_url(st.secrets["GOOGLE_SHEET_URL"])
+    return sh.worksheet(sheet_name)
+
+PASSWORD_SALT = "oeildelaigle_salt_2024"
+
+def hash_password(password):
+    return hashlib.sha256((password + PASSWORD_SALT).encode()).hexdigest()
+
+def find_user_row(email):
+    ws = get_sheet("Users")
+    records = ws.get_all_records()
+    for idx, row in enumerate(records, start=2):
+        if str(row.get("email", "")).strip().lower() == email.strip().lower():
+            return idx, row
+    return None, None
+
+def create_user(email, password):
+    ws = get_sheet("Users")
+    hashed = hash_password(password)
+    ws.append_row([email.strip().lower(), hashed, datetime.utcnow().isoformat(), "", ""])
+
+def verify_login(email, password):
+    idx, row = find_user_row(email)
+    if not row:
+        return False
+    return row.get("password", "") == hash_password(password)
+
+def set_session_token(email, token):
+    idx, row = find_user_row(email)
+    if idx:
+        ws = get_sheet("Users")
+        ws.update_cell(idx, 5, token)
+
+def check_session_token(email, token):
+    idx, row = find_user_row(email)
+    if not row or not token:
+        return False
+    return str(row.get("session_token", "")) == token
+
+def clear_session_token(email):
+    idx, row = find_user_row(email)
+    if idx:
+        ws = get_sheet("Users")
+        ws.update_cell(idx, 5, "")
+
+# ============== PORTAIL DE CONNEXION ==============
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+    st.session_state.user_email = None
+
+if not st.session_state.logged_in:
+    cookie_email = cookies.get("email")
+    cookie_token = cookies.get("token")
+    if cookie_email and cookie_token and check_session_token(cookie_email, cookie_token):
+        st.session_state.logged_in = True
+        st.session_state.user_email = cookie_email
+
+if not st.session_state.logged_in:
+    st.title("🦅 L'Œil de l'Aigle")
+    st.caption("Connectez-vous pour accéder à votre espace d'analyse")
+
+    auth_choice = st.radio("", ["Se connecter", "Créer un compte"], horizontal=True, label_visibility="collapsed")
+
+    email_input = st.text_input("📧 Adresse Gmail", placeholder="Ex: jeandupont@gmail.com", key="login_email")
+    password_input = st.text_input("🔒 Mot de passe", placeholder="Ex: jeandupont1234", type="password", key="login_password")
+
+    fields_filled = bool(email_input.strip()) and bool(password_input.strip())
+
+    if auth_choice == "Créer un compte":
+        if not fields_filled:
+            st.caption("Remplissez les deux champs ci-dessus pour créer votre compte.")
+        if st.button("✅ Créer mon compte", disabled=not fields_filled):
+            idx, row = find_user_row(email_input)
+            if row:
+                st.error("Un compte existe déjà avec cet email. Choisissez plutôt 'Se connecter'.")
+            else:
+                create_user(email_input, password_input)
+                st.success("🎉 Compte créé avec succès ! Sélectionnez 'Se connecter' ci-dessus pour continuer.")
+    else:
+        if not fields_filled:
+            st.info("⚠️ Veuillez renseigner votre email et votre mot de passe pour activer le bouton de connexion.")
+        if st.button("🚀 Se connecter", disabled=not fields_filled):
+            if verify_login(email_input, password_input):
+                token = secrets_lib.token_hex(16)
+                set_session_token(email_input, token)
+                cookies["email"] = email_input.strip().lower()
+                cookies["token"] = token
+                cookies.save()
+                st.session_state.logged_in = True
+                st.session_state.user_email = email_input.strip().lower()
+                st.rerun()
+            else:
+                st.error("❌ Email ou mot de passe incorrect.")
+    st.stop()
+
+# ============== BARRE LATÉRALE : UTILISATEUR CONNECTÉ ==============
+with st.sidebar:
+    st.write(f"👤 Connecté : **{st.session_state.user_email}**")
+    if st.button("🚪 Se déconnecter"):
+        clear_session_token(st.session_state.user_email)
+        cookies["email"] = ""
+        cookies["token"] = ""
+        cookies.save()
+        for k in list(st.session_state.keys()):
+            del st.session_state[k]
+        st.rerun()
+
+# ============== APPLICATION PRINCIPALE ==============
+st.title("🦅 L'Œil de l'Aigle")
+st.caption("Analyse sportive basée sur données réelles et scénarios les plus probables")
 
 genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 FOOTBALL_HEADERS = {"X-Auth-Token": st.secrets["FOOTBALL_API_KEY"]}
@@ -670,5 +800,6 @@ if st.session_state.stage == "final":
 
     if st.button("🔄 Nouvelle analyse"):
         for k in list(st.session_state.keys()):
-            del st.session_state[k]
+            if k not in ("logged_in", "user_email"):
+                del st.session_state[k]
         st.rerun()
