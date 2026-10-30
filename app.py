@@ -546,8 +546,15 @@ if st.session_state["stage"] == "setup":
     sport_index = sport_options.index(st.session_state["data_sport"]) if st.session_state["data_sport"] in sport_options else 0
     sport = st.selectbox("Sport", sport_options, index=sport_index, key="setup_sport_widget")
 
-    sport_changed = sport != st.session_state["data_sport"]
-    st.session_state["data_sport"] = sport
+    if not st.session_state["sport_initialized"]:
+        # Tout premier passage sur l'accueil : on enregistre simplement le choix,
+        # aucune réinitialisation ni message ne doit se déclencher ici.
+        st.session_state["data_sport"] = sport
+        st.session_state["sport_initialized"] = True
+        sport_changed = False
+    else:
+        sport_changed = sport != st.session_state["data_sport"]
+        st.session_state["data_sport"] = sport
 
     if sport_changed:
         # Remise à zéro UNIQUEMENT du bloc des matchs et infos complémentaires,
