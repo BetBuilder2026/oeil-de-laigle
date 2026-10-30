@@ -102,14 +102,14 @@ i[class*="material"] {
 }
 
 .option-card {
-    border: 1px solid #d8d8d8;
+    border: 1px solid #3a3a3c;
     border-radius: 12px;
     padding: 0.9em 1.2em;
     margin-bottom: 0.7em;
-    background-color: #f5f5f7;
+    background-color: #1c1c1e;
 }
 .option-card, .option-card * {
-    color: #1a1a1a !important;
+    color: #f2f2f2 !important;
 }
 
 .step-title {
@@ -443,14 +443,19 @@ Informations complementaires fournies par l'utilisateur (peuvent etre vides) :
 
 {ANTI_HALLUCINATION_RULE}
 
-Propose exactement 3 options de marche plausibles et distinctes pour ce match, adaptees au sport {sport}.
-Pour chacune, donne le nom du marche, le resultat precis vise, et une probabilite estimee.
-La probabilite doit imperativement etre exprimee sous forme d'un nombre decimal strictement compris
-entre 0 et 1 (exemple : 0.62 pour 62 pourcent). N'exprime jamais la probabilite comme un nombre
-superieur a 1.
+D'abord, redige une courte synthese de 2 a 3 phrases expliquant comment les informations fournies
+ci-dessus (ou leur absence) influencent ton evaluation de ce match. Si aucune information
+complementaire n'a ete fournie, dis-le clairement dans la synthese.
+
+Ensuite, propose exactement 3 options de marche plausibles et distinctes pour ce match, adaptees
+au sport {sport}. Pour chacune, donne le nom du marche, le resultat precis vise, et une probabilite
+estimee. La probabilite doit imperativement etre exprimee sous forme d'un nombre decimal strictement
+compris entre 0 et 1 (exemple : 0.62 pour 62 pourcent). N'exprime jamais la probabilite comme un
+nombre superieur a 1.
 
 Reponds UNIQUEMENT avec un bloc JSON valide de cette forme, sans aucun texte autour :
-{{"A": {{"marche": "...", "resultat": "...", "probabilite": 0.0}},
+{{"synthese": "...",
+"A": {{"marche": "...", "resultat": "...", "probabilite": 0.0}},
 "B": {{"marche": "...", "resultat": "...", "probabilite": 0.0}},
 "C": {{"marche": "...", "resultat": "...", "probabilite": 0.0}}}}
 """
@@ -462,9 +467,12 @@ Reponds UNIQUEMENT avec un bloc JSON valide de cette forme, sans aucun texte aut
         for key in ["A", "B", "C"]:
             if key in parsed and "probabilite" in parsed[key]:
                 parsed[key]["probabilite"] = normalize_probability(parsed[key]["probabilite"])
+        if "synthese" not in parsed:
+            parsed["synthese"] = ""
         return parsed
     except Exception:
         return {
+            "synthese": "Synthese indisponible pour ce match.",
             "A": {"marche": "Indisponible", "resultat": "Indisponible", "probabilite": 0.0},
             "B": {"marche": "Indisponible", "resultat": "Indisponible", "probabilite": 0.0},
             "C": {"marche": "Indisponible", "resultat": "Indisponible", "probabilite": 0.0},
@@ -1128,20 +1136,27 @@ if st.session_state["page"] == "analysis":
                 results = {}
                 info_text = st.session_state.get("data_info_text", "")
                 for m in relevant_matches:
-                    match_info_lines = [
-                        line for line in info_text.split("\n")
-                        if line.strip().startswith(m["mid"] + ":")
-                    ]
-                    match_specific_info = "\n".join(match_info_lines)
-                    results[m["mid"]] = generate_match_options(m, m.get("sport", st.session_state["sport"]), match_specific_info)
-                st.session_state["options_results"] = results
-
-        for m in relevant_matches:
             mid = m["mid"]
             opts = st.session_state["options_results"].get(mid, {})
             st.markdown(f"#### {mid} — {m.get('home','')} 🆚 {m.get('away','')}")
             badge = "<span class='badge-verified'>✅ Données vérifiées</span>" if m.get("date") else "<span class='badge-manual'>⚠️ Mode manuel</span>"
             st.markdown(badge, unsafe_allow_html=True)
+
+            info_text_full = st.session_state.get("data_info_text", "")
+            match_info_lines = [
+                line for line in info_text_full.split("\n")
+                if line.strip().startswith(mid + ":")
+            ]
+            if match_info_lines:
+                st.markdown("**📝 Informations transmises pour ce match :**")
+                for line in match_info_lines:
+                    st.caption(line.strip())
+
+            synthese = opts.get("synthese", "")
+            if synthese:
+                st.markdown(f"🔎 **Analyse de l'Aigle :** {synthese}")
+
+            st.write("")
             for letter in ["A", "B", "C"]:
                 opt = opts.get(letter, {})
                 prob_pct = opt.get("probabilite", 0) * 100
