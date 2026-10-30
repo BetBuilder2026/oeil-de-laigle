@@ -527,6 +527,7 @@ ensure_default("data_info_text", "")
 ensure_default("data_cotes_text", "")
 ensure_default("match_pool", [])
 ensure_default("generated_options", {})
+ensure_default("sport_initialized", False)
 
 st.title("🦅 Œil de l'Aigle")
 
@@ -547,8 +548,8 @@ if st.session_state["stage"] == "setup":
     sport = st.selectbox("Sport", sport_options, index=sport_index, key="setup_sport_widget")
 
     if not st.session_state["sport_initialized"]:
-        # Tout premier passage sur l'accueil : on enregistre simplement le choix,
-        # aucune réinitialisation ni message ne doit se déclencher ici.
+        # Tout premier passage sur l'accueil (ou après "Nouvelle analyse") :
+        # on enregistre simplement le choix, aucune réinitialisation ni message.
         st.session_state["data_sport"] = sport
         st.session_state["sport_initialized"] = True
         sport_changed = False
