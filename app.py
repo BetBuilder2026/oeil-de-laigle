@@ -10,6 +10,15 @@ import secrets as secrets_lib
 from datetime import datetime, timedelta
 import gspread
 from google.oauth2.service_account import Credentials
+# --- Pont de compatibilité pour streamlit-cookies-manager ---
+if not hasattr(st, "cache"):
+    def _legacy_cache_compat(func=None, **kwargs):
+        for bad_kwarg in ("allow_output_mutation", "hash_funcs", "suppress_st_warning"):
+            kwargs.pop(bad_kwarg, None)
+        if func is not None:
+            return st.cache_resource(func)
+        return st.cache_resource(**kwargs)
+    st.cache = _legacy_cache_compat
 from streamlit_cookies_manager import EncryptedCookieManager
 
 st.set_page_config(page_title="Œil de l'Aigle 🦅", page_icon="🦅", layout="centered")
