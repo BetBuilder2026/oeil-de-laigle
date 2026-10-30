@@ -3,6 +3,7 @@
 # ============================================================
 
 import streamlit as st
+import time
 import google.generativeai as genai
 import gspread
 from google.oauth2.service_account import Credentials
@@ -459,6 +460,30 @@ Reponds UNIQUEMENT avec un bloc JSON valide de cette forme, sans aucun texte aut
 "B": {{"marche": "...", "resultat": "...", "probabilite": 0.0}},
 "C": {{"marche": "...", "resultat": "...", "probabilite": 0.0}}}}
 """
+    max_retries = 4
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            response = model.generate_content(prompt)
+            text = response.text.strip()
+            text = text.replace("```json", "").replace("```", "").strip()
+            parsed = json.loads(text)
+            for key in ["A", "B", "C"]:
+                if key in parsed and "probabilite" in parsed[key]:
+                    parsed[key]["probabilite"] = normalize_probability(parsed[key]["probabilite"])
+            if "synthese" not in parsed:
+                parsed["synthese"] = ""
+            return parsed
+        except Exception as e:
+            last_error = e
+            time.sleep(6 * (attempt + 1))
+    return {
+        "synthese": f"Synthese indisponible pour ce match (erreur technique : {str(last_error)[:150]}).",
+        "A": {"marche": "Indisponible", "resultat": "Indisponible", "probabilite": 0.0},
+        "B": {"marche": "Indisponible", "resultat": "Indisponible", "probabilite": 0.0},
+        "C": {"marche": "Indisponible", "resultat": "Indisponible", "probabilite": 0.0},
+    }
+
     try:
         response = model.generate_content(prompt)
         text = response.text.strip()
