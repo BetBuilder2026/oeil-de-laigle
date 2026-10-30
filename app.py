@@ -460,75 +460,48 @@ Reponds UNIQUEMENT avec un bloc JSON valide de cette forme, sans aucun texte aut
 "B": {{"marche": "...", "resultat": "...", "probabilite": 0.0}},
 "C": {{"marche": "...", "resultat": "...", "probabilite": 0.0}}}}
 """
-    max_retries = 3
-    last_error = None
-    for attempt in range(max_retries):
-        try:
-            response = model.generate_content(prompt)
-            raw_text = None
-            try:
-                raw_text = response.text
-            except Exception as text_error:
-                raw_text = None
-                last_error = f"acces texte impossible : {str(text_error)[:200]}"
-            if not raw_text:
-                diag_parts = []
-                feedback = getattr(response, "prompt_feedback", None)
-                if feedback:
-                    diag_parts.append(f"prompt_feedback={feedback}")
-                candidates = getattr(response, "candidates", None)
-                if candidates:
-                    first = candidates[0]
-                    finish_reason = getattr(first, "finish_reason", "inconnu")
-                    diag_parts.append(f"finish_reason={finish_reason}")
-                last_error = "reponse vide. " + (" | ".join(diag_parts) if diag_parts else "aucun detail disponible")
-                raise ValueError(last_error)
-            text = raw_text.strip().replace("```json", "").replace("```", "").strip()
-            parsed = json.loads(text)
-            for key in ["A", "B", "C"]:
-                if key in parsed and "probabilite" in parsed[key]:
-                    parsed[key]["probabilite"] = normalize_probability(parsed[key]["probabilite"])
-            if "synthese" not in parsed:
-                parsed["synthese"] = ""
-            return parsed
-        except Exception as e:
-            last_error = str(e)[:300]
-            if attempt < max_retries - 1:
-                time.sleep(5)
-    return {
-        "synthese": f"Synthese indisponible pour ce match (diagnostic : {last_error}).",
-        "A": {"marche": "Indisponible", "resultat": "Indisponible", "probabilite": 0.0},
-        "B": {"marche": "Indisponible", "resultat": "Indisponible", "probabilite": 0.0},
-        "C": {"marche": "Indisponible", "resultat": "Indisponible", "probabilite": 0.0},
-    }
-    max_retries = 4
-    last_error = None
-    for attempt in range(max_retries):
-        try:
-            response = model.generate_content(prompt)
-            text = response.text.strip()
-            text = text.replace("```json", "").replace("```", "").strip()
-            parsed = json.loads(text)
-            for key in ["A", "B", "C"]:
-                if key in parsed and "probabilite" in parsed[key]:
-                    parsed[key]["probabilite"] = normalize_probability(parsed[key]["probabilite"])
-            if "synthese" not in parsed:
-                parsed["synthese"] = ""
-            return parsed
-        except Exception as e:
-            last_error = e
-            time.sleep(6 * (attempt + 1))
-    return {
-        "synthese": f"Synthese indisponible pour ce match (erreur technique : {str(last_error)[:150]}).",
-        "A": {"marche": "Indisponible", "resultat": "Indisponible", "probabilite": 0.0},
-        "B": {"marche": "Indisponible", "resultat": "Indisponible", "probabilite": 0.0},
-        "C": {"marche": "Indisponible", "resultat": "Indisponible", "probabilite": 0.0},
-    }
-
+    last_error = "aucune tentative effectuee"
     try:
         response = model.generate_content(prompt)
-        text = response.text.strip()
-        text = text.replace("```json", "").replace("```", "").strip()
+    except Exception as api_error:
+        last_error = f"erreur appel API : {str(api_error)[:300]}"
+        return {
+            "synthese": f"Synthese indisponible pour ce match (diagnostic : {last_error}).",
+            "A": {"marche": "Indisponible", "resultat": "Indisponible", "probabilite": 0.0},
+            "B": {"marche": "Indisponible", "resultat": "Indisponible", "probabilite": 0.0},
+            "C": {"marche": "Indisponible", "resultat": "Indisponible", "probabilite": 0.0},
+        }
+
+    raw_text = ""
+    try:
+        raw_text = response.text or ""
+    except Exception as text_error:
+        feedback = getattr(response, "prompt_feedback", None)
+        last_error = f"texte inaccessible : {str(text_error)[:150]} | feedback={feedback}"
+        return {
+            "synthese": f"Synthese indisponible pour ce match (diagnostic : {last_error}).",
+            "A": {"marche": "Indisponible", "resultat": "Indisponible", "probabilite": 0.0},
+            "B": {"marche": "Indisponible", "resultat": "Indisponible", "probabilite": 0.0},
+            "C": {"marche": "Indisponible", "resultat": "Indisponible", "probabilite": 0.0},
+        }
+
+    text = raw_text.strip().replace("```json", "").replace("```", "").strip()
+
+    if not text:
+        feedback = getattr(response, "prompt_feedback", None)
+        candidates = getattr(response, "candidates", None)
+        finish_reason = None
+        if candidates:
+            finish_reason = getattr(candidates[0], "finish_reason", None)
+        last_error = f"reponse vide apres nettoyage | longueur_brute={len(raw_text)} | finish_reason={finish_reason} | feedback={feedback}"
+        return {
+            "synthese": f"Synthese indisponible pour ce match (diagnostic : {last_error}).",
+            "A": {"marche": "Indisponible", "resultat": "Indisponible", "probabilite": 0.0},
+            "B": {"marche": "Indisponible", "resultat": "Indisponible", "probabilite": 0.0},
+            "C": {"marche": "Indisponible", "resultat": "Indisponible", "probabilite": 0.0},
+        }
+
+    try:
         parsed = json.loads(text)
         for key in ["A", "B", "C"]:
             if key in parsed and "probabilite" in parsed[key]:
@@ -536,14 +509,14 @@ Reponds UNIQUEMENT avec un bloc JSON valide de cette forme, sans aucun texte aut
         if "synthese" not in parsed:
             parsed["synthese"] = ""
         return parsed
-    except Exception:
+    except Exception as json_error:
+        last_error = f"JSON invalide : {str(json_error)[:150]} | texte_recu={text[:200]}"
         return {
-            "synthese": "Synthese indisponible pour ce match.",
+            "synthese": f"Synthese indisponible pour ce match (diagnostic : {last_error}).",
             "A": {"marche": "Indisponible", "resultat": "Indisponible", "probabilite": 0.0},
             "B": {"marche": "Indisponible", "resultat": "Indisponible", "probabilite": 0.0},
             "C": {"marche": "Indisponible", "resultat": "Indisponible", "probabilite": 0.0},
         }
-
 def evaluate_extra_market(match, extra_market_name, user_info_text=""):
     model = configure_gemini()
     prompt = f"""{NO_MARKDOWN_BASE}
