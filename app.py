@@ -143,8 +143,8 @@ def clear_session_token(email: str):
     sheet.update_cell(idx, 5, "")
 
 # ============================================================
-# HISTORIQUE : FONCTIONS TECHNIQUES (Étape A - backend uniquement,
-# pas encore branché dans le flux ci-dessous, ce sera l'Étape B)
+# HISTORIQUE : FONCTIONS TECHNIQUES (Étape A - backend, pas encore
+# branché automatiquement dans le flux, ce sera l'Étape B)
 # ============================================================
 def classify_period(dt: datetime) -> str:
     now = datetime.now()
@@ -512,6 +512,22 @@ with st.sidebar:
 if "stage" not in st.session_state:
     st.session_state["stage"] = "setup"
 
+def ensure_default(key, default):
+    if key not in st.session_state:
+        st.session_state[key] = default
+
+# Stockage persistant indépendant du cycle de vie des widgets Streamlit,
+# pour éviter que les champs se vident lors des allers-retours entre pages.
+ensure_default("data_sport", "Football")
+ensure_default("data_competition", None)
+ensure_default("data_cote_cible", 1.50)
+ensure_default("data_nb_tout", None)
+ensure_default("data_manual_text", "")
+ensure_default("data_info_text", "")
+ensure_default("data_cotes_text", "")
+ensure_default("match_pool", [])
+ensure_default("generated_options", {})
+
 st.title("🦅 Œil de l'Aigle")
 
 # ============================================================
@@ -526,19 +542,44 @@ if st.session_state["stage"] == "setup":
     )
     st.write("")
 
-    sport = st.selectbox(
-        "Sport",
-        ["Football", "Basketball", "Tennis", "Hockey sur glace", "Football américain", "Tout"],
-        key="setup_sport"
-    )
+    sport_options = ["Football", "Basketball", "Tennis", "Hockey sur glace", "Football américain", "Tout"]
+    sport_index = sport_options.index(st.session_state["data_sport"]) if st.session_state["data_sport"] in sport_options else 0
+    sport = st.selectbox("Sport", sport_options, index=sport_index, key="setup_sport_widget")
+
+    sport_changed = sport != st.session_state["data_sport"]
+    st.session_state["data_sport"] = sport
+
+    if sport_changed:
+        # Remise à zéro UNIQUEMENT du bloc des matchs et infos complémentaires,
+        # conformément au fonctionnement demandé : seul un changement de sport réinitialise.
+        for widget_key in ("setup_competition_widget", "manual_text_widget", "info_text_widget", "cotes_text_widget"):
+            st.session_state.pop(widget_key, None)
+        st.session_state["data_competition"] = None
+        st.session_state["data_manual_text"] = ""
+        st.session_state["data_info_text"] = ""
+        st.session_state["data_cotes_text"] = ""
+        st.session_state["match_pool"] = []
+        st.session_state["generated_options"] = {}
+        st.info("Le sport a changé : les matchs précédemment saisis ont été réinitialisés.")
 
     competition = None
     if sport == "Football":
-        competition = st.selectbox("Compétition", list(FOOTBALL_COMPETITIONS.keys()) + ["Tout"], key="setup_competition")
+        comp_options = list(FOOTBALL_COMPETITIONS.keys()) + ["Tout"]
+        comp_index = comp_options.index(st.session_state["data_competition"]) if st.session_state["data_competition"] in comp_options else 0
+        competition = st.selectbox("Compétition", comp_options, index=comp_index, key="setup_competition_widget")
+        st.session_state["data_competition"] = competition
     elif sport == "Basketball":
-        competition = st.selectbox("Compétition", ["NBA (auto)", "Euroligue (manuel)"], key="setup_competition")
+        comp_options = ["NBA (auto)", "Euroligue (manuel)"]
+        comp_index = comp_options.index(st.session_state["data_competition"]) if st.session_state["data_competition"] in comp_options else 0
+        competition = st.selectbox("Compétition", comp_options, index=comp_index, key="setup_competition_widget")
+        st.session_state["data_competition"] = competition
 
-    cote_cible = st.number_input("Cote cible", min_value=1.01, step=0.01, key="setup_cote_cible")
+    cote_cible = st.number_input(
+        "Cote cible", min_value=1.01, step=0.01,
+        value=float(st.session_state["data_cote_cible"]),
+        key="setup_cote_widget"
+    )
+    st.session_state["data_cote_cible"] = cote_cible
 
     is_auto = (sport == "Football" and competition != "Tout") or (sport == "Basketball" and competition == "NBA (auto)")
     is_manual_needed = not is_auto
@@ -551,8 +592,15 @@ if st.session_state["stage"] == "setup":
     nb_tout = None
     if is_manual_needed and cote_cible:
         reco = recommended_manual_matches(cote_cible)
+        default_nb = st.session_state["data_nb_tout"] if st.session_state["data_nb_tout"] else reco
+        default_nb = min(max(int(default_nb), 1), MAX_MANUAL_GLOBAL)
         st.caption(f"Nombre de matchs recommandé pour cette cote : {reco} (plafond {MAX_MANUAL_GLOBAL})")
-        nb_tout = st.slider("Nombre de matchs à inclure", min_value=1, max_value=MAX_MANUAL_GLOBAL, value=reco, key="setup_nb_tout")
+        nb_tout = st.slider("Nombre de matchs à inclure", min_value=1, max_value=MAX_MANUAL_GLOBAL, value=default_nb, key="setup_nb_widget")
+        st.session_state["data_nb_tout"] = nb_tout
+
+        if st.session_state.get("data_manual_text", "").strip():
+            with st.expander("📝 Matchs déjà saisis précédemment (tu pourras les compléter à l'étape suivante)"):
+                st.text(st.session_state["data_manual_text"])
 
     if st.button("🚀 Lancer l'analyse", disabled=not cote_cible):
         mode, coupon_max_size, jours, limit, threshold = determine_mode_params(cote_cible)
@@ -606,13 +654,22 @@ elif st.session_state["stage"] == "manual_entry":
         st.session_state["stage"] = "setup"
         st.rerun()
 
-    nb = st.session_state.get("nb_tout", 5)
+    nb = st.session_state.get("nb_tout") or st.session_state.get("data_nb_tout") or 5
     sport_label = st.session_state.get("sport", "")
     st.caption(
         f"Saisis jusqu'à {nb} matchs, un par ligne, au format : M1: Équipe A vs Équipe B - Date"
         + (" - Sport" if sport_label == "Tout" else "")
     )
-    manual_text = st.text_area("Liste des matchs", height=220, key="manual_matches_text")
+    if st.session_state.get("data_manual_text", "").strip():
+        st.caption("Tes matchs précédemment saisis ont été conservés ci-dessous. Modifie ou complète la liste si besoin.")
+
+    manual_text = st.text_area(
+        "Liste des matchs",
+        value=st.session_state.get("data_manual_text", ""),
+        height=220,
+        key="manual_text_widget"
+    )
+    st.session_state["data_manual_text"] = manual_text
 
     if st.button("Valider les matchs", disabled=not manual_text.strip()):
         mids_found = MID_REGEX.findall(manual_text)
@@ -650,10 +707,14 @@ elif st.session_state["stage"] == "info_request":
         )
         for m in active_matches:
             st.caption(f"{m['mid']} — {m['label']}")
+
         info_text = st.text_area(
             "Colle tes informations complémentaires au format : M1: texte libre / M2: texte libre",
-            height=180, key="info_request_text"
+            value=st.session_state.get("data_info_text", ""),
+            height=180,
+            key="info_text_widget"
         )
+        st.session_state["data_info_text"] = info_text
 
         if st.button("Continuer vers les options de marché ➡️"):
             info_map = {}
@@ -682,9 +743,6 @@ elif st.session_state["stage"] == "options_ready":
     else:
         st.warning("⚠️ Mode manuel")
 
-    if "generated_options" not in st.session_state:
-        st.session_state["generated_options"] = {}
-
     with st.spinner("Génération des options de marché par l'IA (peut prendre quelques minutes)..."):
         for m in pool:
             if m["mid"] not in st.session_state["generated_options"]:
@@ -706,7 +764,13 @@ elif st.session_state["stage"] == "options_ready":
     st.info("Indique les cotes réelles de ton bookmaker pour chaque match, au format : M1: A=1.85 B=1.70 C=1.90")
     st.caption("Marchés personnalisés optionnels : EXTRA: Nom_du_marche=cote,Autre_marche=cote (sans espace ni virgule dans les noms)")
 
-    cotes_text = st.text_area("Cotes", height=200, key="cotes_input")
+    cotes_text = st.text_area(
+        "Cotes",
+        value=st.session_state.get("data_cotes_text", ""),
+        height=200,
+        key="cotes_text_widget"
+    )
+    st.session_state["data_cotes_text"] = cotes_text
 
     required_mids = set(m["mid"] for m in pool)
     provided_mids = set(MID_REGEX.findall(cotes_text))
