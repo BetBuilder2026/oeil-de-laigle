@@ -102,11 +102,14 @@ i[class*="material"] {
 }
 
 .option-card {
-    border: 1px solid #e0e0e0;
+    border: 1px solid #d8d8d8;
     border-radius: 12px;
     padding: 0.9em 1.2em;
     margin-bottom: 0.7em;
-    background-color: #fafafa;
+    background-color: #f5f5f7;
+}
+.option-card, .option-card * {
+    color: #1a1a1a !important;
 }
 
 .step-title {
@@ -551,23 +554,29 @@ def parse_cotes_input(text):
     return result
 
 def parse_extra_input(text):
-    extra = {}
+    extra_by_mid = {}
     if not text:
-        return extra
-    text = re.sub(r"^EXTRA\s*:\s*", "", text.strip(), flags=re.IGNORECASE)
-    pairs = text.split(",")
-    for pair in pairs:
-        if "=" not in pair:
-            continue
-        name, val = pair.split("=", 1)
-        name = name.strip()
-        if name:
-            try:
-                extra[name] = float(val.strip().replace(",", "."))
-            except ValueError:
-                pass
-    return extra
-
+        return extra_by_mid
+    blocks = re.split(r"(M\d+)_EXTRA\s*:", text)
+    for i in range(1, len(blocks), 2):
+        mid = blocks[i]
+        content = blocks[i + 1] if i + 1 < len(blocks) else ""
+        content = content.split("\n")[0]
+        pairs = content.split(",")
+        markets = {}
+        for pair in pairs:
+            if "=" not in pair:
+                continue
+            name, val = pair.split("=", 1)
+            name = name.strip()
+            if name:
+                try:
+                    markets[name] = float(val.strip().replace(",", "."))
+                except ValueError:
+                    pass
+        if markets:
+            extra_by_mid[mid] = markets
+    return extra_by_mid
 def clean_justification_text(text):
     text = re.sub(r"[{}\[\]]", "", text or "")
     text = re.sub(r"```[a-zA-Z]*", "", text)
@@ -992,20 +1001,9 @@ if st.session_state["page"] == "analysis":
         sport_choice = st.session_state["sport"]
 
         matches_data = []
-        for i in range(nb_matches):
+         for i in range(nb_matches):
             mid = f"M{i+1}"
             st.markdown(f"**{mid}**")
-            col1, col2 = st.columns(2)
-            with col1:
-                home_key = f"data_home_{i}"
-                ensure_default(home_key, "")
-                home_val = st.text_input(f"Équipe A ({mid})", value=st.session_state[home_key], key=f"widget_home_{i}")
-                st.session_state[home_key] = home_val
-            with col2:
-                away_key = f"data_away_{i}"
-                ensure_default(away_key, "")
-                away_val = st.text_input(f"Équipe B ({mid})", value=st.session_state[away_key], key=f"widget_away_{i}")
-                st.session_state[away_key] = away_val
 
             if sport_choice == "Tout":
                 sport_for_match_key = f"data_sport_match_{i}"
@@ -1020,6 +1018,23 @@ if st.session_state["page"] == "analysis":
             else:
                 sport_for_match = sport_choice if sport_choice != "Basketball" else "Basketball (Euroligue)"
 
+            if sport_for_match == "Tennis":
+                label_a, label_b = f"Joueur(se) A ({mid})", f"Joueur(se) B ({mid})"
+            else:
+                label_a, label_b = f"Équipe A ({mid})", f"Équipe B ({mid})"
+
+            col1, col2 = st.columns(2)
+            with col1:
+                home_key = f"data_home_{i}"
+                ensure_default(home_key, "")
+                home_val = st.text_input(label_a, value=st.session_state[home_key], key=f"widget_home_{i}")
+                st.session_state[home_key] = home_val
+            with col2:
+                away_key = f"data_away_{i}"
+                ensure_default(away_key, "")
+                away_val = st.text_input(label_b, value=st.session_state[away_key], key=f"widget_away_{i}")
+                st.session_state[away_key] = away_val
+
             matches_data.append({
                 "mid": mid,
                 "home": home_val,
@@ -1030,6 +1045,7 @@ if st.session_state["page"] == "analysis":
                 "status": "en_attente",
             })
             st.write("")
+        
 
         all_filled = all(m["home"].strip() and m["away"].strip() for m in matches_data)
         if not all_filled:
@@ -1148,17 +1164,21 @@ if st.session_state["page"] == "analysis":
         )
         st.session_state["data_cotes_text"] = cotes_widget
 
-        st.markdown("##### 💎 Marché EXTRA (optionnel)")
-        st.caption("Format : EXTRA: Marche=cote,Marche2=cote2 (sans espace ni virgule dans les noms, underscores obligatoires)")
+        st.markdown("##### 💎 Marchés EXTRA (optionnels)")
+        st.caption(
+            "Un marché supplémentaire par match, précédé de son identifiant. "
+            "Format : M1_EXTRA: Marche=cote (sans espace ni virgule dans les noms, underscores obligatoires). "
+            "Une ligne par match concerné, les autres matchs n'ont pas besoin d'EXTRA."
+        )
         ensure_default("data_extra_text", "")
-        extra_widget = st.text_input(
-            "Marché EXTRA",
+        extra_widget = st.text_area(
+            "Marchés EXTRA",
             value=st.session_state["data_extra_text"],
-            placeholder="EXTRA: Plus_de_2_5_buts=1.65",
+            height=100,
+            placeholder="M1_EXTRA: Plus_de_2_5_buts=1.65\nM2_EXTRA: Double_chance_1X=1.30",
             key="widget_extra_text",
         )
         st.session_state["data_extra_text"] = extra_widget
-
         required_mids = [m["mid"] for m in relevant_matches]
         missing_cotes = find_missing_mids(cotes_widget, required_mids)
         if missing_cotes:
@@ -1199,24 +1219,22 @@ if st.session_state["page"] == "analysis":
                                 "cote": cotes_m[letter],
                             })
 
-                extra_name = None
-                for name in extra_parsed:
-                    extra_name = name
-                    break
-                if extra_name:
+                extra_for_mid = extra_parsed.get(mid, {})
+                if extra_for_mid:
                     info_text = st.session_state.get("data_info_text", "")
                     match_info_lines = [
                         line for line in info_text.split("\n")
                         if line.strip().startswith(mid + ":")
                     ]
                     match_specific_info = "\n".join(match_info_lines)
-                    extra_prob = evaluate_extra_market(m, extra_name, match_specific_info)
-                    candidates.append({
-                        "letter": "EXTRA",
-                        "marche": extra_name,
-                        "probabilite": extra_prob,
-                        "cote": extra_parsed[extra_name],
-                    })
+                    for extra_name, extra_cote in extra_for_mid.items():
+                        extra_prob = evaluate_extra_market(m, extra_name, match_specific_info)
+                        candidates.append({
+                            "letter": "EXTRA",
+                            "marche": extra_name,
+                            "probabilite": extra_prob,
+                            "cote": extra_cote,
+                        })
 
                 if not candidates:
                     m_copy = dict(m)
