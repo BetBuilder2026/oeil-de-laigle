@@ -76,7 +76,7 @@ i[class*="material"] {
 
 .subtitle {
     font-size: 1.08em;
-    color: #555;
+    color: #999;
     margin-bottom: 1.2em;
     line-height: 1.5em;
 }
@@ -143,7 +143,7 @@ SPORT_ICONS = {
 }
 
 FOOTBALL_COMPETITIONS = {
-    "Toutes les competitions": "ALL",
+    "Toutes les compétitions": "ALL",
     "Premier League": "PL",
     "Ligue 1": "FL1",
     "Liga": "PD",
@@ -153,17 +153,17 @@ FOOTBALL_COMPETITIONS = {
     "Championship": "ELC",
     "Eredivisie": "DED",
     "Primeira Liga": "PPL",
-    "Brasileirao": "BSA",
+    "Brasileirão": "BSA",
 }
 
-MANUAL_SPORTS = ["Tennis", "Hockey sur glace", "Football americain", "Basketball (Euroligue)", "Tout"]
+MANUAL_SPORTS = ["Tennis", "Hockey sur glace", "Football américain", "Basketball (Euroligue)", "Tout"]
 
 MANUAL_MARKETS = {
     "Tennis": ["Vainqueur du match", "Total jeux Over/Under", "Handicap en jeux"],
     "Hockey sur glace": ["Vainqueur (incl. prolongation)", "Total buts Over/Under", "Puck line"],
-    "Football americain": ["Vainqueur (Moneyline)", "Spread/Handicap", "Total points Over/Under"],
-    "Football": ["1X2", "Double Chance", "BTTS", "Over/Under buts", "Total individuel equipe", "Handicap asiatique simple"],
-    "Basketball (Euroligue)": ["Victoire", "Handicap/Spread", "Over/Under points total", "Total individuel equipe"],
+    "Football américain": ["Vainqueur (Moneyline)", "Spread/Handicap", "Total points Over/Under"],
+    "Football": ["1X2", "Double Chance", "BTTS", "Over/Under buts", "Total individuel équipe", "Handicap asiatique simple"],
+    "Basketball (Euroligue)": ["Victoire", "Handicap/Spread", "Over/Under points total", "Total individuel équipe"],
 }
 
 NO_MARKDOWN_BASE = (
@@ -585,6 +585,7 @@ def parse_extra_input(text):
         if markets:
             extra_by_mid[mid] = markets
     return extra_by_mid
+
 def clean_justification_text(text):
     text = re.sub(r"[{}\[\]]", "", text or "")
     text = re.sub(r"```[a-zA-Z]*", "", text)
@@ -642,12 +643,12 @@ if not st.session_state["logged_in"]:
 if not st.session_state["logged_in"]:
     st.markdown("<div class='big-title'>🦅 Œil de l'Aigle</div>", unsafe_allow_html=True)
     st.markdown(
-        "<div class='subtitle'>Votre allié pour des analyses sportives precises, basees sur des "
-        "donnees reelles et une intelligence rigoureuse. Connectez-vous pour acceder a vos analyses.</div>",
+        "<div class='subtitle'>Votre allié pour des analyses sportives précises, basées sur des "
+        "données réelles et une intelligence rigoureuse. Connectez-vous pour accéder à vos analyses.</div>",
         unsafe_allow_html=True,
     )
 
-    tab_login, tab_signup = st.tabs(["🔐 Se connecter", "🆕 Creer un compte"])
+    tab_login, tab_signup = st.tabs(["🔐 Se connecter", "🆕 Créer un compte"])
 
     with tab_login:
         email_login = st.text_input("Compte Gmail", placeholder="votre.email@gmail.com", key="login_email")
@@ -666,22 +667,22 @@ if not st.session_state["logged_in"]:
                 st.error("Email ou mot de passe incorrect.")
         if login_disabled:
             st.caption("Veuillez remplir les deux champs pour vous connecter.")
-        with st.expander("Mot de passe oublie ?"):
-            st.info("Cette fonctionnalite sera bientot disponible.")
+        with st.expander("Mot de passe oublié ?"):
+            st.info("Cette fonctionnalité sera bientôt disponible.")
 
     with tab_signup:
         email_signup = st.text_input("Compte Gmail", placeholder="votre.email@gmail.com", key="signup_email")
         password_signup = st.text_input("Mot de passe", type="password", placeholder="Choisissez un mot de passe", key="signup_password")
         signup_disabled = not (email_signup.strip() and password_signup.strip())
-        if st.button("🆕 Creer mon compte", disabled=signup_disabled, key="btn_signup"):
+        if st.button("🆕 Créer mon compte", disabled=signup_disabled, key="btn_signup"):
             existing_row, _ = find_user_row(email_signup)
             if existing_row:
-                st.error("Un compte existe deja avec cet email.")
+                st.error("Un compte existe déjà avec cet email.")
             else:
                 create_user(email_signup, password_signup)
-                st.success("Compte cree avec succes ! Vous pouvez maintenant vous connecter.")
+                st.success("Compte créé avec succès ! Vous pouvez maintenant vous connecter.")
         if signup_disabled:
-            st.caption("Veuillez remplir les deux champs pour creer un compte.")
+            st.caption("Veuillez remplir les deux champs pour créer un compte.")
 
     st.stop()
 
@@ -716,19 +717,30 @@ ensure_default("threshold", None)
 
 with st.sidebar:
     st.markdown(f"### 🦅 Œil de l'Aigle")
-    st.caption(f"Connecte : {st.session_state['user_email']}")
+    st.caption(f"Connecté : {st.session_state['user_email']}")
     st.write("")
 
-    if st.button("🎯 Nouvelle analyse", use_container_width=True):
+    if st.button("🎯 Nouvelle analyse", use_container_width=True, key="btn_sidebar_new"):
+        keys_to_clear = [
+            "step", "sport", "competition", "cote_cible", "analysis_id", "data_sport",
+            "has_match_data", "matches_pool", "relevant_matches", "data_info_text",
+            "data_cotes_text", "data_extra_text", "options_results", "final_result",
+            "mode", "coupon_max_size", "jours_fenetre", "pool_limit", "threshold",
+            "final_justification", "final_justification_combo",
+        ]
+        for key in keys_to_clear:
+            if key in st.session_state:
+                del st.session_state[key]
         st.session_state["page"] = "analysis"
+        st.session_state["step"] = "setup"
         st.rerun()
 
-    if st.button("📜 Historique", use_container_width=True):
+    if st.button("📜 Historique", use_container_width=True, key="btn_sidebar_history"):
         st.session_state["page"] = "history"
         st.rerun()
 
     st.write("")
-    if st.button("🚪 Se deconnecter", use_container_width=True):
+    if st.button("🚪 Se déconnecter", use_container_width=True, key="btn_sidebar_logout"):
         clear_session_token(st.session_state["user_email"])
         cookies["session_token"] = ""
         cookies.save()
@@ -776,17 +788,17 @@ def group_entries_by_analysis(entries):
     return grouped
 
 STAGE_LABELS = {
-    "setup": "🏁 Parametrage initial",
+    "setup": "🏁 Paramétrage initial",
     "manual_entry": "✍️ Saisie manuelle des matchs",
-    "info_request": "🔍 Informations complementaires",
-    "options_ready": "📊 Options generees",
-    "final": "🚩 Analyse finalisee",
+    "info_request": "🔍 Informations complémentaires",
+    "options_ready": "📊 Options générées",
+    "final": "🚩 Analyse finalisée",
 }
 
 if st.session_state["page"] == "history":
     st.markdown("<div class='big-title'>📜 Historique de vos analyses</div>", unsafe_allow_html=True)
     st.markdown(
-        "<div class='subtitle'>Retrouvez ici toutes vos analyses precedentes, classees par periode. "
+        "<div class='subtitle'>Retrouvez ici toutes vos analyses précédentes, classées par période. "
         "Vous pouvez reprendre une analyse interrompue ou supprimer celles qui ne vous servent plus.</div>",
         unsafe_allow_html=True,
     )
@@ -794,24 +806,24 @@ if st.session_state["page"] == "history":
     entries = get_history_entries(st.session_state["user_email"])
 
     if not entries:
-        st.info("Aucune analyse enregistree pour le moment.")
+        st.info("Aucune analyse enregistrée pour le moment.")
     else:
         grouped = group_entries_by_analysis(entries)
 
-        if st.button("🗑️ Tout supprimer"):
+        if st.button("🗑️ Tout supprimer", key="btn_delete_all"):
             st.session_state["confirm_delete_all"] = True
 
         if st.session_state.get("confirm_delete_all"):
-            st.warning("Confirmez-vous la suppression de TOUT l'historique ? Cette action est irreversible.")
+            st.warning("Confirmez-vous la suppression de TOUT l'historique ? Cette action est irréversible.")
             col_yes, col_no = st.columns(2)
             with col_yes:
-                if st.button("✅ Oui, tout supprimer"):
+                if st.button("✅ Oui, tout supprimer", key="btn_confirm_delete_all"):
                     all_rows = [e["row_number"] for e in entries]
                     delete_history_rows(all_rows)
                     st.session_state["confirm_delete_all"] = False
                     st.rerun()
             with col_no:
-                if st.button("❌ Annuler"):
+                if st.button("❌ Annuler", key="btn_cancel_delete_all"):
                     st.session_state["confirm_delete_all"] = False
                     st.rerun()
 
@@ -844,14 +856,14 @@ if st.session_state["page"] == "history":
                 with st.container():
                     st.markdown(
                         f"<div class='option-card'><b>{SPORT_ICONS.get(sport_disp, '🏆')} {sport_disp}</b> "
-                        f"— Cote cible : {cote_disp}<br>Etape : {stage_disp}<br>"
+                        f"— Cote cible : {cote_disp}<br>Étape : {stage_disp}<br>"
                         f"<small>{latest['timestamp']}</small></div>",
                         unsafe_allow_html=True,
                     )
                     col_resume, col_delete = st.columns(2)
                     with col_resume:
                         if st.button("▶️ Reprendre", key=f"resume_{g['analysis_id']}"):
-                            st.info("La reprise complete de cette analyse sera bientot disponible.")
+                            st.info("La reprise complète de cette analyse sera bientôt disponible.")
                     with col_delete:
                         if st.button("🗑️ Supprimer", key=f"delete_{g['analysis_id']}"):
                             delete_history_rows(g["row_numbers"])
@@ -890,7 +902,7 @@ if st.session_state["page"] == "analysis":
             unsafe_allow_html=True,
         )
 
-        sport_list = ["Football", "Basketball", "Tennis", "Hockey sur glace", "Football americain", "Tout"]
+        sport_list = ["Football", "Basketball", "Tennis", "Hockey sur glace", "Football américain", "Tout"]
         default_index = sport_list.index(st.session_state["data_sport"]) if st.session_state["data_sport"] in sport_list else 0
         sport_choice = st.selectbox("🏆 Choisissez votre sport", sport_list, index=default_index, key="widget_sport")
 
@@ -1016,7 +1028,7 @@ if st.session_state["page"] == "analysis":
             if sport_choice == "Tout":
                 sport_for_match_key = f"data_sport_match_{i}"
                 ensure_default(sport_for_match_key, "Football")
-                sport_options_all = ["Football", "Basketball", "Tennis", "Hockey sur glace", "Football americain"]
+                sport_options_all = ["Football", "Basketball", "Tennis", "Hockey sur glace", "Football américain"]
                 sport_for_match = st.selectbox(
                     f"Sport ({mid})", sport_options_all,
                     index=sport_options_all.index(st.session_state[sport_for_match_key]),
@@ -1053,11 +1065,10 @@ if st.session_state["page"] == "analysis":
                 "status": "en_attente",
             })
             st.write("")
-        
 
         all_filled = all(m["home"].strip() and m["away"].strip() for m in matches_data)
         if not all_filled:
-            st.warning("Merci de renseigner le nom des deux équipes pour chaque match avant de continuer.")
+            st.warning("Merci de renseigner le nom des deux équipes (ou joueurs) pour chaque match avant de continuer.")
 
         if st.button("➡️ Continuer vers les informations complémentaires", disabled=not all_filled, key="btn_continue_to_info"):
             st.session_state["matches_pool"] = matches_data
@@ -1136,6 +1147,15 @@ if st.session_state["page"] == "analysis":
                 results = {}
                 info_text = st.session_state.get("data_info_text", "")
                 for m in relevant_matches:
+                    match_info_lines = [
+                        line for line in info_text.split("\n")
+                        if line.strip().startswith(m["mid"] + ":")
+                    ]
+                    match_specific_info = "\n".join(match_info_lines)
+                    results[m["mid"]] = generate_match_options(m, m.get("sport", st.session_state["sport"]), match_specific_info)
+                st.session_state["options_results"] = results
+
+        for m in relevant_matches:
             mid = m["mid"]
             opts = st.session_state["options_results"].get(mid, {})
             st.markdown(f"#### {mid} — {m.get('home','')} 🆚 {m.get('away','')}")
@@ -1194,6 +1214,7 @@ if st.session_state["page"] == "analysis":
             key="widget_extra_text",
         )
         st.session_state["data_extra_text"] = extra_widget
+
         required_mids = [m["mid"] for m in relevant_matches]
         missing_cotes = find_missing_mids(cotes_widget, required_mids)
         if missing_cotes:
