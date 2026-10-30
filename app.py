@@ -1,6 +1,6 @@
 import streamlit as st
 
-# --- Pont de compatibilité st.cache (versions récentes de Streamlit) ---
+# --- Pont de compatibilite st.cache (versions recentes de Streamlit) ---
 if not hasattr(st, "cache"):
     def _legacy_cache_compat(func=None, **kwargs):
         for bad_kwarg in ("allow_output_mutation", "hash_funcs", "suppress_st_warning"):
@@ -24,10 +24,10 @@ from google.oauth2.service_account import Credentials
 import google.generativeai as genai
 from streamlit_cookies_manager import EncryptedCookieManager
 
-# ============================================================
-# CONFIGURATION PAGE
-# ============================================================
-st.set_page_config(page_title="Œil de l'Aigle", page_icon="🦅", layout="centered")
+st.set_page_config(page_title="Oeil de l'Aigle", page_icon="🦅", layout="centered")
+
+BACKTICK = chr(96)
+STRIP_CHARS = BACKTICK + " \n"
 
 st.markdown("""
 <style>
@@ -37,12 +37,22 @@ html, body, [class*="css"], .stMarkdown, .stText, p, span, div, label {
     font-weight: 400 !important;
     line-height: 1.6 !important;
 }
+[data-testid="stIconMaterial"],
+.material-icons,
+.material-icons-outlined,
+.material-icons-round,
+.material-icons-sharp,
+.material-symbols-outlined,
+.material-symbols-rounded,
+.material-symbols-sharp,
+span[class*="material-symbols"],
+i[class*="material"] {
+    font-family: 'Material Symbols Rounded', 'Material Icons' !important;
+    font-size: inherit !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
-# ============================================================
-# CONSTANTES
-# ============================================================
 MAX_INFO_MATCHES = 5
 MAX_POOL_SIMPLE_COMBO = 10
 MAX_POOL_MULTI_AUTO = 15
@@ -63,36 +73,33 @@ FOOTBALL_COMPETITIONS = {
     "Championship": "ELC",
     "Eredivisie": "DED",
     "Primeira Liga": "PPL",
-    "Brasileirão": "BSA",
+    "Brasileirao": "BSA",
 }
 
 MANUAL_MARKETS = {
     "Tennis": ["Vainqueur du match", "Total jeux Over/Under", "Handicap en jeux"],
     "Hockey sur glace": ["Vainqueur (incl. prolongation)", "Total buts Over/Under", "Puck line"],
-    "Football américain": ["Vainqueur (Moneyline)", "Spread/Handicap", "Total points Over/Under"],
-    "Football": ["1X2", "Double Chance", "BTTS", "Over/Under buts", "Total individuel équipe", "Handicap asiatique simple"],
-    "Basketball": ["Victoire", "Handicap/Spread", "Over/Under points total", "Total individuel équipe"],
+    "Football americain": ["Vainqueur (Moneyline)", "Spread/Handicap", "Total points Over/Under"],
+    "Football": ["1X2", "Double Chance", "BTTS", "Over/Under buts", "Total individuel equipe", "Handicap asiatique simple"],
+    "Basketball": ["Victoire", "Handicap/Spread", "Over/Under points total", "Total individuel equipe"],
 }
 
 STAGE_LABELS = {
     "setup": "Configuration initiale",
     "manual_entry": "Saisie des matchs",
-    "info_request": "Infos complémentaires",
-    "options_ready": "Options générées / cotes en attente",
-    "final": "Analyse terminée",
+    "info_request": "Infos complementaires",
+    "options_ready": "Options generees / cotes en attente",
+    "final": "Analyse terminee",
 }
 
 PERIOD_ORDER = ["Aujourd'hui", "Hier", "Cette semaine", "Ce mois-ci", "Plus ancien"]
 
 NO_MARKDOWN_BASE = (
-    "Réponds uniquement en texte brut, sans markdown, sans astérisques, sans titres, "
-    "sans listes à puces, sans blocs de code, sans JSON visible, en phrases fluides "
-    "et naturelles en français."
+    "Reponds uniquement en texte brut, sans markdown, sans asterisques, sans titres, "
+    "sans listes a puces, sans blocs de code, sans JSON visible, en phrases fluides "
+    "et naturelles en francais."
 )
 
-# ============================================================
-# FORMULES DE CALIBRATION
-# ============================================================
 def estimated_selections(cote_cible):
     return max(2, round(math.log(cote_cible) / math.log(1.7)))
 
@@ -121,9 +128,15 @@ def ensure_default(key, default):
     if key not in st.session_state:
         st.session_state[key] = default
 
-# ============================================================
-# GOOGLE SHEETS — CLIENT & UTILISATEURS
-# ============================================================
+def normalize_probability(value):
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if value > 1:
+        value = value / 100.0
+    return max(0.0, min(1.0, value))
+
 @st.cache_resource
 def get_gspread_client():
     creds_dict = dict(st.secrets["gcp_service_account"])
@@ -189,9 +202,6 @@ def clear_session_token(email):
     sheet = get_sheet("Users")
     sheet.update_cell(row_index, 5, "")
 
-# ============================================================
-# HISTORIQUE
-# ============================================================
 def classify_period(timestamp_str):
     try:
         ts = datetime.fromisoformat(timestamp_str)
@@ -288,10 +298,10 @@ def group_by_period(grouped_entries):
     return periods
 
 def render_history_page():
-    st.title("🕑 Historique de vos analyses")
+    st.title("Historique de vos analyses")
     display_aerated(
-        "Retrouvez ici toutes vos analyses passées, classées par période. Cliquez sur "
-        "« Reprendre » pour continuer une analyse interrompue, ou supprimez celles dont "
+        "Retrouvez ici toutes vos analyses passees, classees par periode. Cliquez sur "
+        "Reprendre pour continuer une analyse interrompue, ou supprimez celles dont "
         "vous n'avez plus besoin."
     )
 
@@ -299,25 +309,25 @@ def render_history_page():
 
     col_a, col_b = st.columns([3, 1])
     with col_b:
-        if st.button("🗑️ Tout supprimer", use_container_width=True):
+        if st.button("Tout supprimer", use_container_width=True):
             st.session_state["confirm_delete_all"] = True
 
     if st.session_state.get("confirm_delete_all"):
-        st.warning("Confirmer la suppression de TOUT l'historique ? Cette action est irréversible.")
+        st.warning("Confirmer la suppression de TOUT l'historique ? Cette action est irreversible.")
         c1, c2 = st.columns(2)
         with c1:
-            if st.button("✅ Oui, tout supprimer"):
+            if st.button("Oui, tout supprimer"):
                 delete_all_history(st.session_state["user_email"])
                 st.session_state["confirm_delete_all"] = False
-                st.success("Historique entièrement supprimé.")
+                st.success("Historique entierement supprime.")
                 st.rerun()
         with c2:
-            if st.button("❌ Annuler"):
+            if st.button("Annuler"):
                 st.session_state["confirm_delete_all"] = False
                 st.rerun()
 
     if not entries:
-        st.info("Aucune analyse enregistrée pour le moment.")
+        st.info("Aucune analyse enregistree pour le moment.")
     else:
         grouped = group_history_by_analysis(entries)
         periods = group_by_period(grouped)
@@ -328,7 +338,7 @@ def render_history_page():
                 continue
             st.markdown(f"### {period_name}")
 
-            if st.button(f"🗑️ Supprimer le bloc « {period_name} »", key=f"del_block_{period_index}"):
+            if st.button(f"Supprimer le bloc {period_name}", key=f"del_block_{period_index}"):
                 aids = {e["session_data"].get("analysis_id") for e in period_entries}
                 rows_to_delete = []
                 for raw in entries:
@@ -338,30 +348,30 @@ def render_history_page():
                     elif raw_aid is None and raw in period_entries:
                         rows_to_delete.append(raw["row_index"])
                 delete_history_rows(rows_to_delete)
-                st.success(f"Bloc « {period_name} » supprimé.")
+                st.success(f"Bloc {period_name} supprime.")
                 st.rerun()
 
             for e in period_entries:
-                sport = e["sport"] or "—"
-                cote = e["cote_cible"] or "—"
+                sport = e["sport"] or "-"
+                cote = e["cote_cible"] or "-"
                 stage_label = STAGE_LABELS.get(e["stage"], e["stage"])
                 try:
-                    dt_display = datetime.fromisoformat(e["timestamp"]).strftime("%d/%m/%Y à %H:%M")
+                    dt_display = datetime.fromisoformat(e["timestamp"]).strftime("%d/%m/%Y a %H:%M")
                 except Exception:
                     dt_display = e["timestamp"]
 
                 with st.container():
-                    st.markdown(f"**{sport}** — Cote cible : {cote} — *{stage_label}*")
-                    st.caption(f"Dernière activité : {dt_display}")
+                    st.markdown(f"**{sport}** - Cote cible : {cote} - *{stage_label}*")
+                    st.caption(f"Derniere activite : {dt_display}")
                     c1, c2 = st.columns([1, 1])
                     with c1:
-                        if st.button("▶️ Reprendre", key=f"resume_{e['row_index']}"):
+                        if st.button("Reprendre", key=f"resume_{e['row_index']}"):
                             st.info(
-                                "La reprise automatique de cette analyse sera activée à la "
-                                "prochaine étape. Merci de patienter encore un peu !"
+                                "La reprise automatique de cette analyse sera activee a la "
+                                "prochaine etape. Merci de patienter encore un peu !"
                             )
                     with c2:
-                        if st.button("🗑️ Supprimer", key=f"del_single_{e['row_index']}"):
+                        if st.button("Supprimer", key=f"del_single_{e['row_index']}"):
                             aid = e["session_data"].get("analysis_id")
                             if aid:
                                 rows_to_delete = [
@@ -371,11 +381,11 @@ def render_history_page():
                             else:
                                 rows_to_delete = [e["row_index"]]
                             delete_history_rows(rows_to_delete)
-                            st.success("Analyse supprimée.")
+                            st.success("Analyse supprimee.")
                             st.rerun()
                     st.divider()
 
-    if st.button("⬅️ Retour à l'application"):
+    if st.button("Retour a l'application"):
         st.session_state["view"] = "main"
         st.rerun()
 
@@ -411,9 +421,6 @@ def record_progress(stage):
     except Exception:
         pass
 
-# ============================================================
-# API SPORTIVES
-# ============================================================
 def fetch_football_matches(competition_code, days_window, limit):
     try:
         today = datetime.now().date()
@@ -431,15 +438,15 @@ def fetch_football_matches(competition_code, days_window, limit):
         matches = data.get("matches", [])
         pool = []
         for m in matches[:limit]:
-            home = m.get("homeTeam", {}).get("name", "Équipe A")
-            away = m.get("awayTeam", {}).get("name", "Équipe B")
+            home = m.get("homeTeam", {}).get("name", "Equipe A")
+            away = m.get("awayTeam", {}).get("name", "Equipe B")
             comp = m.get("competition", {}).get("name", "")
             date_str = m.get("utcDate", "")
             label = f"{home} vs {away} ({comp}, {date_str[:10]})"
             pool.append({"label": label, "raw": m})
         return pool
     except Exception as e:
-        st.error(f"Erreur lors de la récupération des matchs de football : {e}")
+        st.error(f"Erreur lors de la recuperation des matchs de football : {e}")
         return []
 
 def fetch_nba_matches(days_window, limit):
@@ -456,19 +463,16 @@ def fetch_nba_matches(days_window, limit):
         games = data.get("data", [])
         pool = []
         for g in games[:limit]:
-            home = g.get("home_team", {}).get("full_name", "Équipe A")
-            away = g.get("visitor_team", {}).get("full_name", "Équipe B")
+            home = g.get("home_team", {}).get("full_name", "Equipe A")
+            away = g.get("visitor_team", {}).get("full_name", "Equipe B")
             date_str = g.get("date", "")
             label = f"{home} vs {away} (NBA, {date_str[:10]})"
             pool.append({"label": label, "raw": g})
         return pool
     except Exception as e:
-        st.error(f"Erreur lors de la récupération des matchs NBA : {e}")
+        st.error(f"Erreur lors de la recuperation des matchs NBA : {e}")
         return []
 
-# ============================================================
-# IA GEMINI
-# ============================================================
 genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 GEMINI_MODEL = "gemini-flash-lite-latest"
 
@@ -483,13 +487,14 @@ def call_gemini(prompt):
 def build_options_prompt(match_label, sport):
     suggestions = MANUAL_MARKETS.get(sport)
     suggestion_text = (
-        f" Inspire-toi si besoin de ces types de marchés habituels pour ce sport : {', '.join(suggestions)}."
+        f" Inspire-toi si besoin de ces types de marches habituels pour ce sport : {', '.join(suggestions)}."
         if suggestions else ""
     )
     return f"""{NO_MARKDOWN_BASE}
-Tu es un analyste sportif expert en {sport}. Pour le match suivant : {match_label}, propose exactement 3 options de marché plausibles et réalistes (nommées A, B et C), chacune avec une probabilité estimée en pourcentage, basées sur le contexte réel de ce match (forme des équipes, enjeux, historique).{suggestion_text}
-Réponds d'abord par un court paragraphe de présentation du match en 2-3 phrases.
-Puis insère exactement le texte ###DATA_BLOCK### suivi d'un JSON strict de la forme:
+Tu es un analyste sportif expert en {sport}. Pour le match suivant : {match_label}, propose exactement 3 options de marche plausibles et realistes (nommees A, B et C), chacune avec une probabilite estimee, basees sur le contexte reel de ce match (forme des equipes, enjeux, historique).{suggestion_text}
+Important : la probabilite doit imperativement etre exprimee sous forme d'un nombre decimal strictement compris entre 0 et 1 (par exemple 0.45 pour signifier 45 pourcent). N'exprime jamais la probabilite comme un nombre superieur a 1.
+Reponds d'abord par un court paragraphe de presentation du match en 2-3 phrases.
+Puis insere exactement le texte ###DATA_BLOCK### suivi d'un JSON strict de la forme:
 {{"A": {{"marche": "...", "probabilite": 0.0}}, "B": {{"marche": "...", "probabilite": 0.0}}, "C": {{"marche": "...", "probabilite": 0.0}}}}
 """
 
@@ -498,10 +503,13 @@ def parse_options_response(text):
         parts = text.split("###DATA_BLOCK###", 1)
         narrative = parts[0].strip()
         data_part = parts[1].strip() if len(parts) > 1 else "{}"
-        data_part = data_part.strip("` \n")
+        data_part = data_part.strip(STRIP_CHARS)
         if data_part.lower().startswith("json"):
             data_part = data_part[4:].strip()
         options = json.loads(data_part)
+        for key in ["A", "B", "C"]:
+            if key in options and "probabilite" in options[key]:
+                options[key]["probabilite"] = normalize_probability(options[key]["probabilite"])
         return narrative, options
     except Exception:
         return text.strip(), {
@@ -513,10 +521,10 @@ def parse_options_response(text):
 def build_reliability_prompt(matches):
     listing = "\n".join([f"- {m['label']}" for m in matches])
     return f"""{NO_MARKDOWN_BASE}
-Voici une liste de matchs à venir :
+Voici une liste de matchs a venir :
 {listing}
-Classe ces matchs du plus prévisible/fiable au moins prévisible, en te basant sur la forme des équipes, les enjeux et le contexte réel.
-Insère ###DATA_BLOCK### suivi d'un JSON strict de la forme {{"classement": ["libellé du match 1", "libellé du match 2", ...]}} listant TOUS les matchs du plus au moins fiable.
+Classe ces matchs du plus previsible/fiable au moins previsible, en te basant sur la forme des equipes, les enjeux et le contexte reel.
+Insere ###DATA_BLOCK### suivi d'un JSON strict de la forme {{"classement": ["libelle du match 1", "libelle du match 2", ...]}} listant TOUS les matchs du plus au moins fiable.
 """
 
 def rank_matches_by_reliability(matches, keep_n):
@@ -526,7 +534,7 @@ def rank_matches_by_reliability(matches, keep_n):
     response = call_gemini(prompt)
     try:
         _, data_part = response.split("###DATA_BLOCK###", 1)
-        data_part = data_part.strip().strip("` \n")
+        data_part = data_part.strip().strip(STRIP_CHARS)
         if data_part.lower().startswith("json"):
             data_part = data_part[4:].strip()
         ranking = json.loads(data_part).get("classement", [])
@@ -548,8 +556,9 @@ def rank_matches_by_reliability(matches, keep_n):
 
 def build_extra_eval_prompt(match_label, extra_market_name, sport):
     return f"""{NO_MARKDOWN_BASE}
-Pour le match {match_label} en {sport}, évalue la probabilité réaliste du marché suivant proposé par l'utilisateur : {extra_market_name}.
-Insère ###DATA_BLOCK### suivi d'un JSON strict {{"probabilite": 0.0}}.
+Pour le match {match_label} en {sport}, evalue la probabilite realiste du marche suivant propose par l'utilisateur : {extra_market_name}.
+Important : la probabilite doit imperativement etre un nombre decimal strictement compris entre 0 et 1 (par exemple 0.45 pour 45 pourcent), jamais un nombre superieur a 1.
+Insere ###DATA_BLOCK### suivi d'un JSON strict {{"probabilite": 0.0}}.
 """
 
 def evaluate_extra_market(match_label, extra_market_name, sport):
@@ -557,18 +566,19 @@ def evaluate_extra_market(match_label, extra_market_name, sport):
     response = call_gemini(prompt)
     try:
         _, data_part = response.split("###DATA_BLOCK###", 1)
-        data_part = data_part.strip().strip("` \n")
+        data_part = data_part.strip().strip(STRIP_CHARS)
         if data_part.lower().startswith("json"):
             data_part = data_part[4:].strip()
-        return json.loads(data_part).get("probabilite", 0.0)
+        raw_prob = json.loads(data_part).get("probabilite", 0.0)
+        return normalize_probability(raw_prob)
     except Exception:
         return 0.0
 
 def build_justification_prompt(selected_summary, alternatives_summary, cote_cible, produit_cotes):
     return f"""{NO_MARKDOWN_BASE}
-Rédige une justification en 3 à 4 phrases fluides, sans aucune liste ni accolade ni JSON, expliquant pourquoi le coupon suivant a été retenu : {selected_summary}.
-Cote cible demandée : {cote_cible}, produit des cotes obtenu : {produit_cotes:.2f}.
-Compare brièvement avec les autres options évaluées mais non retenues : {alternatives_summary}.
+Redige une justification en 3 a 4 phrases fluides, sans aucune liste ni accolade ni JSON, expliquant pourquoi le coupon suivant a ete retenu : {selected_summary}.
+Cote cible demandee : {cote_cible}, produit des cotes obtenu : {produit_cotes:.2f}.
+Compare brievement avec les autres options evaluees mais non retenues : {alternatives_summary}.
 """
 
 def clean_justification_text(text):
@@ -638,11 +648,7 @@ def find_best_combination(validated_matches, cote_cible, max_size):
                 best_diff = diff
                 best = combo
     return best, best_diff
-
-# ============================================================
-# PORTAIL DE CONNEXION
-# ============================================================
-cookies = EncryptedCookieManager(prefix="oeildelaigle_", password=st.secrets["COOKIE_PASSWORD"])
+    cookies = EncryptedCookieManager(prefix="oeildelaigle_", password=st.secrets["COOKIE_PASSWORD"])
 if not cookies.ready():
     st.stop()
 
@@ -658,10 +664,10 @@ if not st.session_state["logged_in"]:
             st.session_state["user_email"] = email_from_token
 
 if not st.session_state["logged_in"]:
-    st.markdown("<h2 style='text-align:center;'>🦅 Œil de l'Aigle</h2>", unsafe_allow_html=True)
-    display_aerated("Connectez-vous ou créez un compte pour accéder à votre assistant d'analyse sportive personnel.")
+    st.markdown("<h2 style='text-align:center;'>Oeil de l'Aigle</h2>", unsafe_allow_html=True)
+    display_aerated("Connectez-vous ou creez un compte pour acceder a votre assistant d'analyse sportive personnel.")
 
-    mode_login = st.radio("", ["Se connecter", "Créer un compte"], horizontal=True, label_visibility="collapsed")
+    mode_login = st.radio("", ["Se connecter", "Creer un compte"], horizontal=True, label_visibility="collapsed")
 
     email_input = st.text_input("Compte Gmail", placeholder="votreadresse@gmail.com", key="login_email_input")
     password_input = st.text_input("Mot de passe", type="password", placeholder="Votre mot de passe", key="login_password_input")
@@ -683,20 +689,17 @@ if not st.session_state["logged_in"]:
         if not fields_filled:
             st.caption("Remplissez les deux champs pour continuer.")
     else:
-        if st.button("Créer le compte", disabled=not fields_filled):
+        if st.button("Creer le compte", disabled=not fields_filled):
             if find_user_row(email_input.strip()):
-                st.error("Ce compte existe déjà.")
+                st.error("Ce compte existe deja.")
             else:
                 create_user(email_input.strip(), password_input)
-                st.success("Compte créé ! Vous pouvez maintenant vous connecter.")
+                st.success("Compte cree ! Vous pouvez maintenant vous connecter.")
         if not fields_filled:
             st.caption("Remplissez les deux champs pour continuer.")
 
     st.stop()
 
-# ============================================================
-# INITIALISATION DE L'ÉTAT DE SESSION
-# ============================================================
 ensure_default("view", "main")
 ensure_default("stage", "setup")
 ensure_default("data_sport", "Football")
@@ -719,15 +722,12 @@ ensure_default("threshold", DEFAULT_CONFIDENCE_THRESHOLD)
 ensure_default("is_auto_current", False)
 ensure_default("confirm_delete_all", False)
 
-# ============================================================
-# SIDEBAR
-# ============================================================
 with st.sidebar:
-    st.write(f"Connecté : {st.session_state['user_email']}")
-    if st.button("🕑 Historique", use_container_width=True):
+    st.write(f"Connecte : {st.session_state['user_email']}")
+    if st.button("Historique", use_container_width=True):
         st.session_state["view"] = "history"
         st.rerun()
-    if st.button("🚪 Se déconnecter", use_container_width=True):
+    if st.button("Se deconnecter", use_container_width=True):
         clear_session_token(st.session_state["user_email"])
         if "session_token" in cookies:
             del cookies["session_token"]
@@ -736,26 +736,20 @@ with st.sidebar:
         st.session_state["user_email"] = ""
         st.rerun()
 
-# ============================================================
-# AFFICHAGE HISTORIQUE
-# ============================================================
 if st.session_state["view"] == "history":
     render_history_page()
     st.stop()
 
-# ============================================================
-# ÉTAPE : SETUP
-# ============================================================
 if st.session_state["stage"] == "setup":
-    st.title("🦅 Œil de l'Aigle")
+    st.title("Oeil de l'Aigle")
     display_aerated(
-        "Bienvenue dans votre assistant d'analyse sportive. Œil de l'Aigle scrute les matchs "
-        "à venir, croise les données réelles disponibles et vous aide à construire un coupon "
-        "cohérent avec la cote que vous visez. Choisissez votre sport, votre compétition et "
+        "Bienvenue dans votre assistant d'analyse sportive. Oeil de l'Aigle scrute les matchs "
+        "a venir, croise les donnees reelles disponibles et vous aide a construire un coupon "
+        "coherent avec la cote que vous visez. Choisissez votre sport, votre competition et "
         "votre cote cible : l'application s'occupe du reste, en toute transparence sur ses sources."
     )
 
-    sport_options = ["Football", "Basketball", "Tennis", "Hockey sur glace", "Football américain", "Tout"]
+    sport_options = ["Football", "Basketball", "Tennis", "Hockey sur glace", "Football americain", "Tout"]
     sport_widget = st.selectbox(
         "Sport", sport_options,
         index=sport_options.index(st.session_state["data_sport"]) if st.session_state["data_sport"] in sport_options else 0,
@@ -767,20 +761,20 @@ if st.session_state["stage"] == "setup":
         comp_options = list(FOOTBALL_COMPETITIONS.keys()) + ["Tout"]
         if competition_widget_value not in comp_options:
             competition_widget_value = comp_options[0]
-        competition_widget = st.selectbox("Compétition", comp_options, index=comp_options.index(competition_widget_value), key="competition_select_widget")
-        st.success("✅ Données vérifiées — récupération automatique des matchs réels.")
+        competition_widget = st.selectbox("Competition", comp_options, index=comp_options.index(competition_widget_value), key="competition_select_widget")
+        st.success("Donnees verifiees - recuperation automatique des matchs reels.")
     elif sport_widget == "Basketball":
         comp_options = ["NBA (auto)", "Euroligue (manuel)"]
         if competition_widget_value not in comp_options:
             competition_widget_value = comp_options[0]
-        competition_widget = st.selectbox("Compétition", comp_options, index=comp_options.index(competition_widget_value), key="competition_select_widget")
+        competition_widget = st.selectbox("Competition", comp_options, index=comp_options.index(competition_widget_value), key="competition_select_widget")
         if competition_widget == "NBA (auto)":
-            st.success("✅ Données vérifiées — récupération automatique des matchs réels.")
+            st.success("Donnees verifiees - recuperation automatique des matchs reels.")
         else:
-            st.warning("⚠️ Mode manuel — vous décrirez vous-même les matchs.")
+            st.warning("Mode manuel - vous decrirez vous-meme les matchs.")
     else:
         competition_widget = None
-        st.warning("⚠️ Mode manuel — vous décrirez vous-même les matchs.")
+        st.warning("Mode manuel - vous decrirez vous-meme les matchs.")
 
     st.session_state["data_competition"] = competition_widget
 
@@ -795,14 +789,14 @@ if st.session_state["stage"] == "setup":
         recommended = recommended_manual_matches(cote_widget)
         default_value = st.session_state["data_nb_tout"] if st.session_state["data_nb_tout"] else recommended
         nb_tout_widget = st.slider(
-            "Nombre de matchs que vous allez décrire",
+            "Nombre de matchs que vous allez decrire",
             min_value=1, max_value=MAX_MANUAL_GLOBAL,
             value=min(MAX_MANUAL_GLOBAL, max(1, default_value)),
             key="nb_tout_slider_widget",
         )
         display_aerated(
             f"Pour une cote cible de {cote_widget}, nous recommandons environ {recommended} "
-            f"matchs afin de disposer d'assez d'options validées."
+            f"matchs afin de disposer d'assez d'options validees."
         )
         st.session_state["data_nb_tout"] = nb_tout_widget
 
@@ -822,19 +816,19 @@ if st.session_state["stage"] == "setup":
         st.session_state["data_cotes_text"] = ""
         st.session_state["match_pool"] = []
         st.session_state["generated_options"] = {}
-        st.info("Le sport a changé : les matchs, infos et cotes précédemment saisis ont été réinitialisés.")
+        st.info("Le sport a change : les matchs, infos et cotes precedemment saisis ont ete reinitialises.")
 
     st.session_state["data_sport"] = sport_widget
     st.session_state["data_cote_cible"] = cote_widget
     st.session_state["data_sport_prev"] = sport_widget
 
-    if st.button("🚀 Lancer l'analyse", use_container_width=True):
+    if st.button("Lancer l'analyse", use_container_width=True):
         st.session_state["current_analysis_id"] = secrets_lib.token_hex(8)
 
         if sport_widget == "Football":
             mode, coupon_max_size, jours, limit, threshold = determine_mode_params(cote_widget)
             competition_code = None if competition_widget == "Tout" else FOOTBALL_COMPETITIONS.get(competition_widget)
-            with st.spinner("Récupération des matchs réels en cours..."):
+            with st.spinner("Recuperation des matchs reels en cours..."):
                 pool_raw = fetch_football_matches(competition_code, jours, limit)
             pool = [{"mid": f"M{i+1}", "label": p["label"], "raw": p["raw"]} for i, p in enumerate(pool_raw)]
             st.session_state["match_pool"] = pool
@@ -859,7 +853,7 @@ if st.session_state["stage"] == "setup":
 
         elif sport_widget == "Basketball" and competition_widget == "NBA (auto)":
             mode, coupon_max_size, jours, limit, threshold = determine_mode_params(cote_widget)
-            with st.spinner("Récupération des matchs NBA réels en cours..."):
+            with st.spinner("Recuperation des matchs NBA reels en cours..."):
                 pool_raw = fetch_nba_matches(jours, limit)
             pool = [{"mid": f"M{i+1}", "label": p["label"], "raw": p["raw"]} for i, p in enumerate(pool_raw)]
             st.session_state["match_pool"] = pool
@@ -892,20 +886,17 @@ if st.session_state["stage"] == "setup":
             record_progress("manual_entry")
             st.rerun()
 
-# ============================================================
-# ÉTAPE : MANUAL_ENTRY
-# ============================================================
 elif st.session_state["stage"] == "manual_entry":
-    st.title("✍️ Saisie manuelle des matchs")
+    st.title("Saisie manuelle des matchs")
     display_aerated(
-        f"Puisque ce sport ne bénéficie pas encore d'une connexion automatique aux données "
-        f"en direct, vous allez décrire vous-même les matchs à analyser. Indiquez jusqu'à "
-        f"{st.session_state['data_nb_tout']} rencontres, chacune précédée de son identifiant "
+        f"Puisque ce sport ne beneficie pas encore d'une connexion automatique aux donnees "
+        f"en direct, vous allez decrire vous-meme les matchs a analyser. Indiquez jusqu'a "
+        f"{st.session_state['data_nb_tout']} rencontres, chacune precedee de son identifiant "
         f"(M1, M2, etc.), par exemple : M1: PSG vs OM."
     )
-    st.warning("⚠️ Mode manuel — vous êtes responsable de l'exactitude des informations saisies.")
+    st.warning("Mode manuel - vous etes responsable de l'exactitude des informations saisies.")
 
-    if st.button("⬅️ Retour à l'accueil"):
+    if st.button("Retour a l'accueil"):
         st.session_state["stage"] = "setup"
         st.rerun()
 
@@ -933,17 +924,14 @@ elif st.session_state["stage"] == "manual_entry":
         record_progress("info_request")
         st.rerun()
 
-# ============================================================
-# ÉTAPE : INFO_REQUEST
-# ============================================================
 elif st.session_state["stage"] == "info_request":
-    st.title("🔎 Informations complémentaires")
+    st.title("Informations complementaires")
     display_aerated(
-        "Avant de générer les options d'analyse, prenez quelques minutes pour aller chercher "
-        "des informations fraîches sur ces rencontres (compositions probables, blessures, "
-        "forme récente, enjeux). Des sources comme Score24, Flashscore ou les sites officiels "
-        "des compétitions sont idéales pour ça. Collez ensuite ici ce que vous avez trouvé, "
-        "pour chaque match concerné."
+        "Avant de generer les options d'analyse, prenez quelques minutes pour aller chercher "
+        "des informations fraiches sur ces rencontres (compositions probables, blessures, "
+        "forme recente, enjeux). Des sources comme Score24, Flashscore ou les sites officiels "
+        "des competitions sont ideales pour ca. Collez ensuite ici ce que vous avez trouve, "
+        "pour chaque match concerne."
     )
 
     info_mids = st.session_state.get("info_mids")
@@ -952,42 +940,44 @@ elif st.session_state["stage"] == "info_request":
 
     relevant_matches = [m for m in st.session_state["match_pool"] if m["mid"] in info_mids]
 
-    st.write("Matchs concernés par cette demande d'informations :")
+    st.write("Matchs concernes par cette demande d'informations :")
     for m in relevant_matches:
         st.write(f"- {m['mid']} : {m['label']}")
 
-    if st.button("⬅️ Retour à l'accueil"):
+    if st.button("Retour a l'accueil"):
         st.session_state["stage"] = "setup"
         st.rerun()
 
     info_widget = st.text_area(
-        "Vos informations complémentaires", value=st.session_state["data_info_text"], height=220,
+        "Vos informations complementaires", value=st.session_state["data_info_text"], height=220,
         key="info_text_widget",
-        placeholder="M1: Compositions probables confirmées, attaquant titulaire incertain...\nM2: ...",
+        placeholder="M1: Compositions probables confirmees, attaquant titulaire incertain...\nM2: ...",
     )
     st.session_state["data_info_text"] = info_widget
 
-    if st.button("Continuer vers la génération des options"):
+    required_info_mids = [m["mid"] for m in relevant_matches]
+    missing_info = find_missing_mids(info_widget, required_info_mids)
+    if missing_info:
+        st.warning(f"Merci de renseigner les informations pour : {', '.join(missing_info)}")
+
+    if st.button("Continuer vers la generation des options", disabled=bool(missing_info) or not info_widget.strip()):
         st.session_state["stage"] = "options_ready"
         record_progress("options_ready")
         st.rerun()
 
-# ============================================================
-# ÉTAPE : OPTIONS_READY
-# ============================================================
 elif st.session_state["stage"] == "options_ready":
-    st.title("📊 Options d'analyse")
+    st.title("Options d'analyse")
     display_aerated(
-        "Voici, pour chaque match retenu, trois options de marché plausibles accompagnées de "
-        "leur probabilité estimée. Rendez-vous ensuite sur votre site de paris favori pour "
-        "récupérer les cotes réelles correspondantes, puis saisissez-les ci-dessous au format demandé."
+        "Voici, pour chaque match retenu, trois options de marche plausibles accompagnees de "
+        "leur probabilite estimee. Rendez-vous ensuite sur votre site de paris favori pour "
+        "recuperer les cotes reelles correspondantes, puis saisissez-les ci-dessous au format demande."
     )
 
     match_pool = st.session_state["match_pool"]
 
     if not st.session_state["generated_options"]:
         options_store = {}
-        with st.spinner("Génération des options en cours, cela peut prendre quelques minutes..."):
+        with st.spinner("Generation des options en cours, cela peut prendre quelques minutes..."):
             for m in match_pool:
                 prompt = build_options_prompt(m["label"], st.session_state["data_sport"])
                 response = call_gemini(prompt)
@@ -998,20 +988,20 @@ elif st.session_state["stage"] == "options_ready":
 
     for m in match_pool:
         opts = st.session_state["generated_options"].get(m["mid"], {})
-        st.subheader(f"{m['mid']} — {m['label']}")
+        st.subheader(f"{m['mid']} - {m['label']}")
         narrative = opts.get("_narrative", "")
         if narrative:
             display_aerated(narrative)
         for key in ["A", "B", "C"]:
             if key in opts:
-                st.write(f"Option {key} : {opts[key].get('marche')} — probabilité estimée {opts[key].get('probabilite', 0)*100:.0f}%")
+                st.write(f"Option {key} : {opts[key].get('marche')} - probabilite estimee {opts[key].get('probabilite', 0)*100:.0f}%")
         st.divider()
 
-    st.markdown("Format attendu pour chaque match : **M1: A=1.85 B=1.70 C=1.90**")
-    st.markdown("Marché optionnel supplémentaire : **EXTRA: Nom_du_marche=cote,Autre_marche=cote**")
+    st.markdown("Format attendu pour chaque match : M1: A=1.85 B=1.70 C=1.90")
+    st.markdown("Marche optionnel supplementaire : EXTRA: Nom_du_marche=cote,Autre_marche=cote")
 
     cotes_widget = st.text_area(
-        "Cotes réelles", value=st.session_state["data_cotes_text"], height=220,
+        "Cotes reelles", value=st.session_state["data_cotes_text"], height=220,
         key="cotes_text_widget", placeholder="M1: A=1.85 B=1.70 C=1.90\nEXTRA: Both_teams_to_score=1.95",
     )
     st.session_state["data_cotes_text"] = cotes_widget
@@ -1021,19 +1011,16 @@ elif st.session_state["stage"] == "options_ready":
     if missing:
         st.warning(f"Il manque les cotes pour : {', '.join(missing)}")
 
-    if st.button("🏁 Finaliser l'analyse", disabled=bool(missing) or not cotes_widget.strip()):
+    if st.button("Finaliser l'analyse", disabled=bool(missing) or not cotes_widget.strip()):
         st.session_state["stage"] = "final"
         record_progress("final")
         st.rerun()
 
-# ============================================================
-# ÉTAPE : FINAL
-# ============================================================
 elif st.session_state["stage"] == "final":
-    st.title("🏆 Résultat de l'analyse")
+    st.title("Resultat de l'analyse")
     display_aerated(
         "Voici le fruit de l'analyse : la combinaison qui se rapproche le plus de votre cote "
-        "cible, accompagnée d'une explication claire de ce choix."
+        "cible, accompagnee d'une explication claire de ce choix."
     )
 
     match_pool = st.session_state["match_pool"]
@@ -1076,15 +1063,15 @@ elif st.session_state["stage"] == "final":
             "chosen_market": best_candidate["marche"],
             "chosen_prob": best_candidate["probabilite"],
             "chosen_cote": best_candidate["cote"],
-            "statut": "Validé" if validated else "Rejeté (sous le seuil)",
+            "statut": "Valide" if validated else "Rejete (sous le seuil)",
         })
 
-    validated_matches = [e for e in evaluated if e["statut"] == "Validé"]
+    validated_matches = [e for e in evaluated if e["statut"] == "Valide"]
 
     if not validated_matches:
         st.warning(
-            f"Aucun match n'a atteint le seuil de fiabilité requis ({int(threshold*100)}%). "
-            f"Aucun coupon ne peut être proposé pour le moment. Essayez avec d'autres matchs "
+            f"Aucun match n'a atteint le seuil de fiabilite requis ({int(threshold*100)}%). "
+            f"Aucun coupon ne peut etre propose pour le moment. Essayez avec d'autres matchs "
             f"ou une autre cote cible."
         )
     else:
@@ -1096,35 +1083,35 @@ elif st.session_state["stage"] == "final":
             for c in best_combo:
                 produit *= c["chosen_cote"]
 
-            st.subheader("🎟️ Coupon recommandé")
+            st.subheader("Coupon recommande")
             for c in best_combo:
-                st.write(f"{c['label']} — {c['chosen_market']} (probabilité estimée {c['chosen_prob']*100:.0f}%, cote {c['chosen_cote']})")
-            st.write(f"Produit des cotes : {produit:.2f} (cote cible demandée : {cote_cible})")
+                st.write(f"{c['label']} - {c['chosen_market']} (probabilite estimee {c['chosen_prob']*100:.0f}%, cote {c['chosen_cote']})")
+            st.write(f"Produit des cotes : {produit:.2f} (cote cible demandee : {cote_cible})")
 
             selected_summary = ", ".join([f"{c['label']} ({c['chosen_market']})" for c in best_combo])
             not_selected = [e for e in validated_matches if e not in best_combo]
             alternatives_summary = (
                 ", ".join([f"{e['label']} ({e['chosen_market']})" for e in not_selected])
-                if not_selected else "aucune autre option validée"
+                if not_selected else "aucune autre option validee"
             )
 
             justification_prompt = build_justification_prompt(selected_summary, alternatives_summary, cote_cible, produit)
             justification_raw = call_gemini(justification_prompt)
             justification = clean_justification_text(justification_raw)
 
-            st.subheader("📝 Justification")
+            st.subheader("Justification")
             display_aerated(justification)
         else:
-            st.warning("Impossible de déterminer une combinaison satisfaisante.")
+            st.warning("Impossible de determiner une combinaison satisfaisante.")
 
-    with st.expander("📋 Récapitulatif complet de tous les matchs testés"):
+    with st.expander("Recapitulatif complet de tous les matchs testes"):
         for e in evaluated:
-            cote_display = e["chosen_cote"] if e["chosen_cote"] is not None else "—"
-            prob_display = f"{e['chosen_prob']*100:.0f}%" if e["chosen_prob"] is not None else "—"
-            marche_display = e["chosen_market"] or "—"
-            st.write(f"{e['label']} — Marché retenu : {marche_display} — Cote : {cote_display} — Probabilité : {prob_display} — Statut : {e['statut']}")
+            cote_display = e["chosen_cote"] if e["chosen_cote"] is not None else "-"
+            prob_display = f"{e['chosen_prob']*100:.0f}%" if e["chosen_prob"] is not None else "-"
+            marche_display = e["chosen_market"] or "-"
+            st.write(f"{e['label']} - Marche retenu : {marche_display} - Cote : {cote_display} - Probabilite : {prob_display} - Statut : {e['statut']}")
 
-    if st.button("🔄 Nouvelle analyse"):
+    if st.button("Nouvelle analyse"):
         preserved = {"logged_in": st.session_state["logged_in"], "user_email": st.session_state["user_email"]}
         st.session_state.clear()
         for k, v in preserved.items():
