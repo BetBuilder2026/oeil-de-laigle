@@ -605,12 +605,12 @@ def hash_password(password):
 
 def find_user_row(email):
     normalized = email.strip().lower()
-    for index, row in enumerate(
-        get_users_sheet().get_all_values()[1:],
-        start=2,
-    ):
-        if row and row.strip().lower() == normalized:[0]
+    records = get_users_sheet().get_all_values()
+
+    for index, row in enumerate(records[1:], start=2):
+        if row and row[0].strip().lower() == normalized:
             return index, row
+
     return None, None
 
 
