@@ -406,10 +406,10 @@ def clean_justification_text(text):
 
 
 def display_aerated(text):
-    for paragraph in re.split(r"
-+", text or ""):
-        if paragraph.strip():
-            st.write(paragraph.strip())
+    for paragraph in str(text or "").splitlines():
+        paragraph = paragraph.strip()
+        if paragraph:
+            st.write(paragraph)
 
 
 def extract_info_by_mid(text):
