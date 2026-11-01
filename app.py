@@ -539,6 +539,7 @@ def capture_text(field, widget_key):
     value = S.get(widget_key, "")
     if S.get(field) != value:
         S[field] = value
+        S.pop("widget_confirm_markets", None)
         if field == "data_info_text":
             reset_results()
         else:
@@ -1106,81 +1107,222 @@ def generate_json(prompt):
     raise ValueError(" / ".join(errors))
 
 
+
+# Validation des marchés : la ligne est distincte de la cote du bookmaker.
+MARKET_FORMAT_VERSION = 3
+
+
+def numeric_line(value):
+    if isinstance(value, bool) or value is None:
+        raise ValueError("Ligne numérique manquante.")
+    try:
+        number = float(str(value).replace(",", "."))
+    except (TypeError, ValueError):
+        raise ValueError("La ligne doit être un nombre.")
+    if not math.isfinite(number):
+        raise ValueError("Ligne numérique non finie.")
+    return number
+
+
+def format_line(value, signed=False):
+    result = format(float(value), "+g" if signed else "g")
+    return result.replace(".", ",")
+
+
+def validate_market_option(option, match):
+    if not isinstance(option, dict):
+        raise ValueError("Option absente ou invalide.")
+    if option.get("type_marche") == "indisponible":
+        raise ValueError(str(option.get("raison") or "Données insuffisantes."))
+    kind = str(option.get("type_marche", "")).strip().lower()
+    allowed = {"victoire", "total_match", "total_equipe", "handicap", "marge_victoire", "double_chance", "btts"}
+    if kind not in allowed:
+        raise ValueError("Format ancien ou type de marché non pris en charge. Régénérez l'option.")
+    probability = option.get("probabilite")
+    if isinstance(probability, bool) or not isinstance(probability, (float, int)):
+        raise ValueError("Probabilité numérique entre 0 et 1 requise.")
+    if not math.isfinite(probability) or not 0 <= probability <= 1:
+        raise ValueError("Probabilité hors de l'intervalle 0 à 1.")
+    period = str(option.get("periode") or "").strip()
+    overtime = str(option.get("prolongations") or "").strip()
+    if not period or not overtime:
+        raise ValueError("Période et règle des prolongations requises (ou sans objet).")
+    if overtime not in {"incluses", "exclues", "sans objet"}:
+        raise ValueError("Règle de prolongation non reconnue.")
+    sport = match.get("sport", "")
+    unit = str(option.get("unite") or "").strip().lower()
+    expected = {"Football": "buts", "Hockey sur glace": "buts", "Basketball": "points", "Basketball (Euroligue)": "points", "Football américain": "points", "Tennis": "jeux"}.get(sport)
+    participant = str(option.get("participant") or "").strip()
+    names = [str(match.get("home", "")), str(match.get("away", ""))]
+    if kind in {"victoire", "total_equipe", "handicap", "marge_victoire"}:
+        if kind == "victoire" and participant.casefold() in {"nul", "match nul"} and sport in {"Football", "Hockey sur glace"}:
+            participant = "Match nul"
+        else:
+            canonical = next((name for name in names if name and name.casefold() == participant.casefold()), None)
+            if canonical is None:
+                raise ValueError("Équipe ou joueur non identifié parmi les participants.")
+            participant = canonical
+    line = None
+    if kind in {"total_match", "total_equipe", "handicap", "marge_victoire"}:
+        if unit not in {"points", "buts", "jeux", "sets"}:
+            raise ValueError("Unité obligatoire : points, buts, jeux ou sets.")
+        if expected and unit != expected and not (sport == "Tennis" and unit == "sets"):
+            raise ValueError("Unité incohérente avec le sport.")
+    if kind in {"total_match", "total_equipe"}:
+        direction = str(option.get("sens") or "").strip().capitalize()
+        if direction not in {"Over", "Under"}:
+            raise ValueError("Sens Over ou Under obligatoire.")
+        line = numeric_line(option.get("ligne"))
+        if line <= 0:
+            raise ValueError("Le seuil total doit être strictement positif.")
+        market = "Total de " + unit + (" du match" if kind == "total_match" else " de l'équipe")
+        outcome = f"{direction} {format_line(line)} {unit}"
+        if kind == "total_equipe":
+            outcome = participant + " — " + outcome
+    elif kind == "handicap":
+        line = numeric_line(option.get("ligne"))
+        market = "Handicap/Spread"
+        outcome = f"{participant} {format_line(line, signed=True)} {unit}"
+    elif kind == "marge_victoire":
+        minimum = numeric_line(option.get("minimum"))
+        maximum = numeric_line(option.get("maximum"))
+        if minimum <= 0 or maximum < minimum:
+            raise ValueError("Intervalle de marge de victoire invalide.")
+        market = "Marge de victoire"
+        outcome = f"{participant} gagnent par {format_line(minimum)} à {format_line(maximum)} {unit}"
+    elif kind == "victoire":
+        market, outcome = "Vainqueur du match", participant
+    elif kind == "double_chance":
+        if sport != "Football":
+            raise ValueError("Double chance actuellement prise en charge pour le football uniquement.")
+        outcome = str(option.get("sens") or "").strip().upper()
+        if outcome not in {"1X", "X2", "12"}:
+            raise ValueError("Double chance attendue : 1X, X2 ou 12.")
+        market = "Double chance"
+    else:
+        if sport != "Football":
+            raise ValueError("BTTS actuellement pris en charge pour le football uniquement.")
+        outcome = str(option.get("sens") or "").strip().capitalize()
+        if outcome not in {"Oui", "Non"}:
+            raise ValueError("BTTS : Oui ou Non requis.")
+        market = "Les deux équipes marquent"
+    result = dict(option)
+    result.update(marche=market, resultat=outcome, participant=participant,
+                  probabilite=float(probability), periode=period,
+                  prolongations=overtime, _validation_error="")
+    if line is not None:
+        result["ligne"] = line
+    return result
+
+
+def unavailable_option(reason):
+    return {"type_marche": "indisponible", "marche": "Indisponible",
+            "resultat": "", "probabilite": 0.0, "_validation_error": str(reason)[:350]}
+
+
+def regenerate_options():
+    reset_results()
+    S["data_cotes_text"] = ""
+    S["data_extra_text"] = ""
+    for key in ("widget_cotes_text", "widget_extra_text", "widget_confirm_markets"):
+        S.pop(key, None)
+    S["last_saved_signature"] = None
+
+
 def generate_match_options(match, sport, user_info_text):
-    markets = MANUAL_MARKETS.get(sport, [])
     prompt = f"""
 Tu es un assistant d'analyse sportive prudent.
 {ANTI_HALLUCINATION_RULE}
+Données du match : {json.dumps(match, ensure_ascii=False)}
+Sport : {sport}
+Informations utilisateur : {user_info_text}
 
-Données du match :
-{json.dumps(match, ensure_ascii=False)}
-
-Informations complémentaires fournies par l'utilisateur :
-{user_info_text}
-
-Marchés adaptés possibles :
-{json.dumps(markets, ensure_ascii=False)}
-
-Rédige une synthèse de 2 à 3 phrases, puis exactement 3 options distinctes.
-Chaque option doit préciser le marché ET le résultat exact visé.
-Une probabilité numérique entre 0 et 1 est demandée.
-Si une option ne peut pas être évaluée raisonnablement, utilise 0.
-Ne présente pas une estimation comme une probabilité vérifiée.
-Aucun seuil à atteindre n'est imposé.
-
-Réponds uniquement avec un objet JSON valide :
-{{
-  "synthese": "...",
-  "A": {{"marche": "...", "resultat": "...", "probabilite": 0.0}},
-  "B": {{"marche": "...", "resultat": "...", "probabilite": 0.0}},
-  "C": {{"marche": "...", "resultat": "...", "probabilite": 0.0}}
-}}
+Propose trois options distinctes A, B, C dans le schéma ci-dessous.
+Ne renvoie JAMAIS Over ou Under sans ligne chiffrée.
+Un handicap comporte une équipe et une ligne signée ; une victoire de 4 à 7 points
+est une marge_victoire, jamais un handicap.
+Les lignes proposées ne sont pas vérifiées chez un bookmaker.
+Ne prétends pas connaître les lignes du bookmaker ou ses règles.
+Précise le périmètre proposé dans periode (par exemple match entier), et indique
+prolongations = incluses, exclues, ou sans objet. Ce sont les conditions de la
+proposition à vérifier par l'utilisateur, pas des règles universelles.
+N'invente pas une estimation chiffrée si les données ne permettent pas de la soutenir.
+Dans ce cas renvoie type_marche=indisponible, raison explicite, probabilite=0.
+Tu peux proposer d'autres types autorisés si un marché ne peut pas être évalué.
+Types autorisés : victoire, total_match, total_equipe, handicap, marge_victoire,
+double_chance (football), btts (football), indisponible.
+Participant : nom EXACT d'un des participants, ou Match nul pour une victoire nulle.
+Pour total_match, total_equipe : sens Over ou Under, ligne numérique strictement
+positive, unite points/buts/jeux/sets adaptée au sport.
+Pour handicap : participant, ligne numérique signée, unite.
+Pour marge_victoire : participant, minimum et maximum numériques positifs, unite.
+Pour double_chance : sens 1X, X2 ou 12. Pour btts : sens Oui ou Non.
+Toutes les options évaluables ont periode, prolongations et probabilite entre 0 et 1.
+Les valeurs suivantes décrivent la structure, pas des lignes à recopier :
+{{"synthese":"...", "A":{{"type_marche":"total_match", "sens":"Over",
+"ligne":null, "unite":"points", "participant":"", "periode":"match entier",
+"prolongations":"incluses", "probabilite":0.0}},
+"B":{{"type_marche":"victoire", "participant":"nom exact", "periode":"match entier",
+"prolongations":"incluses", "probabilite":0.0}},
+"C":{{"type_marche":"indisponible", "raison":"Données insuffisantes", "probabilite":0.0}}}}
+Réponds uniquement en JSON. La synthèse comporte 2 à 3 phrases.
 """
+    result = {"synthese": "", "_error": "", "_market_version": MARKET_FORMAT_VERSION}
+    pending = ["A", "B", "C"]
+    feedback = ""
     try:
-        parsed = generate_json(prompt)
-        result = {
-            "synthese": fix_elisions(parsed.get("synthese", "")),
-            "_error": "",
-        }
-        for letter in ("A", "B", "C"):
-            option = parsed.get(letter)
-            if not isinstance(option, dict):
-                raise ValueError(f"Option {letter} absente ou invalide.")
-            market = str(option.get("marche", "")).strip()
-            outcome = str(option.get("resultat", "")).strip()
-            if not market or not outcome:
-                raise ValueError(f"Option {letter} incomplète.")
-            result[letter] = {
-                "marche": fix_elisions(market),
-                "resultat": fix_elisions(outcome),
-                "probabilite": normalize_probability(
-                    option.get("probabilite")
-                ),
-            }
+        for attempt in range(2):
+            parsed = generate_json(prompt + feedback)
+            if not result["synthese"]:
+                result["synthese"] = fix_elisions(parsed.get("synthese", ""))
+            retry = []
+            for letter in pending:
+                raw = parsed.get(letter)
+                try:
+                    result[letter] = validate_market_option(raw, match)
+                except ValueError as error:
+                    result[letter] = unavailable_option(error)
+                    # Une insuffisance annoncée n'est pas relancée pour forcer un pronostic.
+                    if not isinstance(raw, dict) or raw.get("type_marche") != "indisponible":
+                        retry.append(letter)
+            if not retry:
+                break
+            feedback = "\nCorrige uniquement les options incomplètes suivantes, sans inventer de données : " + json.dumps({k: result[k]["_validation_error"] for k in retry}, ensure_ascii=False)
+            pending = retry
         return result
     except Exception as error:
-        return {
-            "synthese": "Génération indisponible pour ce match.",
-            "_error": str(error)[:400],
-        }
+        if any(letter in result and not result[letter].get("_validation_error") for letter in ("A", "B", "C")):
+            for letter in ("A", "B", "C"):
+                result.setdefault(letter, unavailable_option(str(error)))
+            return result
+        return {"synthese": "Génération indisponible pour ce match.",
+                "_error": str(error)[:400], "_market_version": MARKET_FORMAT_VERSION}
 
 
 def evaluate_extra_market(match, name, user_info_text):
+    normalized = str(name).replace("_", " ")
+    if re.search(r"\b(over|under|plus de|moins de|handicap|spread)\b", normalized, re.IGNORECASE) and not re.search(r"[+-]?\d+(?:[.,]\d+)?", normalized):
+        return 0.0
     prompt = f"""
 {ANTI_HALLUCINATION_RULE}
 Match : {json.dumps(match, ensure_ascii=False)}
-Informations utilisateur : {user_info_text}
-Marché exact demandé : {name}
-
-Estime prudemment sa probabilité.
-Si le marché est ambigu ou les données insuffisantes, utilise 0.
-Réponds uniquement en JSON :
-{{"probabilite": 0.0}}
+Informations : {user_info_text}
+Marché EXACT demandé : {name}
+Vérifie qu'il définit un événement précis : participant si nécessaire, seuil numérique
+pour un total ou handicap, période, règle des prolongations si applicable.
+Ne complète PAS une information manquante à la place de l'utilisateur.
+Si ambigu ou données insuffisantes : {{"evaluable":false,"probabilite":0.0}}.
+Sinon estime uniquement CE marché : {{"evaluable":true,"probabilite":0.0}}.
+N'utilise pas la probabilité d'une ancienne option si la ligne a changé.
+Réponds en JSON uniquement.
 """
     parsed = generate_json(prompt)
-    if "probabilite" not in parsed:
-        raise ValueError("Probabilité EXTRA absente.")
-    return normalize_probability(parsed["probabilite"])
+    if parsed.get("evaluable") is not True:
+        return 0.0
+    probability = parsed.get("probabilite")
+    if isinstance(probability, bool) or not isinstance(probability, (int, float)):
+        return 0.0
+    return float(probability) if math.isfinite(probability) and 0 <= probability <= 1 else 0.0
 
 
 def generate_final_justification(result):
@@ -1195,6 +1337,8 @@ def generate_final_justification(result):
             "match": f"{item.get('home')} contre {item.get('away')}",
             "marche": item.get("chosen_marche"),
             "resultat": item.get("chosen_resultat"),
+            "periode": item.get("chosen_periode"),
+            "prolongations": item.get("chosen_prolongations"),
             "cote": item.get("chosen_cote"),
             "probabilite": item.get("chosen_prob"),
         }
@@ -1326,13 +1470,17 @@ def build_final_result(cotes, extras):
 
         for letter, odds in cotes.get(mid, {}).items():
             option = options.get(letter)
-            if not isinstance(option, dict):
+            try:
+                option = validate_market_option(option, match)
+            except ValueError:
                 continue
             candidates.append({
                 **match,
                 "letter": letter,
                 "chosen_marche": option["marche"],
                 "chosen_resultat": option["resultat"],
+                "chosen_periode": option["periode"],
+                "chosen_prolongations": option["prolongations"],
                 "chosen_prob": normalize_probability(
                     option["probabilite"]
                 ),
@@ -1342,6 +1490,7 @@ def build_final_result(cotes, extras):
         if mid in extras:
             extra = extras[mid]
             cache_key = fingerprint({
+                "market_validation_version": MARKET_FORMAT_VERSION,
                 "match": match,
                 "market": extra["marche"],
                 "info": info.get(mid, ""),
@@ -2106,6 +2255,9 @@ elif S["step"] == "options_ready":
         S["step"] = "info_request"
         st.rerun()
 
+    st.caption("Une régénération remplace toutes les options et efface les cotes, les EXTRA et le résultat associés.")
+    st.button("🔄 Régénérer toutes les options et effacer les anciennes cotes", on_click=regenerate_options)
+
     info = extract_info_by_mid(S["data_info_text"])
     missing = missing_information(S["data_info_text"], matches)
     if missing:
@@ -2166,15 +2318,19 @@ elif S["step"] == "options_ready":
         )
 
         for letter in ("A", "B", "C"):
-            option = options.get(letter, {})
-            probability = normalize_probability(
-                option.get("probabilite")
-            )
+            try:
+                option = validate_market_option(options.get(letter, {}), match)
+            except ValueError as error:
+                st.warning(f"Option {letter} non exploitable : {error}")
+                continue
+            probability = option["probabilite"]
             st.markdown(
                 "<div class='option-card'>"
                 f"🎯 <b>Option {letter}</b> — "
                 f"{esc(option.get('marche', ''))}<br>"
                 f"Résultat : {esc(option.get('resultat', ''))}<br>"
+                f"Période : {esc(option['periode'])} — prolongations : {esc(option['prolongations'])}<br>"
+                "Ligne proposée, disponibilité et règles à vérifier chez le bookmaker.<br>"
                 f"📊 Probabilité estimée : {probability:.1%}"
                 "</div>",
                 unsafe_allow_html=True,
@@ -2234,6 +2390,13 @@ elif S["step"] == "options_ready":
             "Identifiants inconnus : " + ", ".join(sorted(unknown))
         )
 
+    for match in matches:
+        for letter in cotes.get(match["mid"], {}):
+            try:
+                validate_market_option(S["options_results"].get(match["mid"], {}).get(letter), match)
+            except ValueError as error:
+                errors.append(f"{match['mid']} option {letter} : retirez sa cote ou régénérez cette option ({error}).")
+
     uncovered = [
         mid for mid in known
         if not cotes.get(mid) and mid not in extras
@@ -2253,9 +2416,16 @@ elif S["step"] == "options_ready":
         "Une seule sélection par match sera retenue."
     )
 
+    confirm_key = widget_value("confirm_markets", False)
+    confirmed = st.checkbox(
+        "J'ai vérifié que chaque cote saisie correspond exactement au résultat, à la ligne, à la période et aux règles de prolongation affichés.",
+        key=confirm_key,
+    )
+    st.caption("Si la ligne de votre bookmaker diffère, ne saisissez pas sa cote sous l'option initiale. Renseignez le marché exact en EXTRA avec sa période et ses règles, afin qu'il soit réévalué.")
+
     if st.button(
         "🚩 Finaliser l'analyse",
-        disabled=bool(errors) or not (cotes or extras) or bool(failed),
+        disabled=bool(errors) or not (cotes or extras) or bool(failed) or not confirmed,
     ):
         try:
             with st.spinner(
@@ -2359,6 +2529,8 @@ elif S["step"] == "final":
             f"{esc(item.get('home', ''))} contre "
             f"{esc(item.get('away', ''))}</b><br>"
             f"Marché : {esc(item.get('chosen_marche', ''))}<br>"
+            f"Période : {esc(item.get('chosen_periode', 'non enregistrée'))} — "
+            f"prolongations : {esc(item.get('chosen_prolongations', 'non enregistrées'))}<br>"
             + (
                 f"Résultat : {esc(outcome)}<br>"
                 if outcome else ""
