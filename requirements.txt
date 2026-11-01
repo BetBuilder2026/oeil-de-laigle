@@ -3,3 +3,4 @@ google-generativeai
 gspread
 google-auth
 streamlit-cookies-manager
+requests

@@ -365,43 +365,23 @@ def determine_mode_params(cote_cible):
 
 
 def fix_elisions(text):
-    text = str(text or "")
-    text = text.replace("’", "'").replace("ʼ", "'")
-
-    # Apostrophe présente, mais entourée d'espaces.
-    text = re.sub(
-        r"\b([ldjcmnstLDJCMNST])s*'s*(?=w)",
-        r"\u0001'",
-        text,
-    )
-
-    # Liste prudente : pas de remplacement général de "D mot".
-    patterns = [
-        (
-            r"\b([Ll])s+"
-            r"(analyse|équipe|equipe|absence|attaque|adversaire|"
-            r"objectif|issue|utilisateur|application|historique)\b",
-            r"\u0001'\u0002",
-        ),
-        (
-            r"\b([Dd])s+"
-            r"(analyse|équipe|equipe|absence|attaque|informations|"
-            r"information|incertitude|autres|ailleurs|abord)\b",
-            r"\u0001'\u0002",
-        ),
-        (r"\b([Cc])s+(est|était)\b", r"\u0001'\u0002"),
-        (r"\b([Jj])s+(ai|avais)\b", r"\u0001'\u0002"),
-        (r"\b([Nn])s+(est|a|ont|avait)\b", r"\u0001'\u0002"),
-        (r"\b([Ss])s+(agit|avère)\b", r"\u0001'\u0002"),
-    ]
-    for pattern, replacement in patterns:
-        text = re.sub(pattern, replacement, text)
+    text = str(text or "").replace("’", "'").replace("ʼ", "'")
+    text = re.sub(r"\b([ldjcmnstLDJCMNST])\s*'\s*(?=\w)",
+                  lambda m: m.group(1) + "'", text)
+    words = {
+        "l": "analyse|équipe|equipe|absence|attaque|adversaire|objectif|issue|utilisateur|application|historique",
+        "d": "analyse|équipe|equipe|absence|attaque|informations|information|incertitude|autres|ailleurs|abord",
+        "c": "est|était", "j": "ai|avais", "n": "est|a|ont|avait", "s": "agit|avère",
+    }
+    for letter, endings in words.items():
+        pattern = rf"\b([{letter}{letter.upper()}])\s+({endings})\b"
+        text = re.sub(pattern, lambda m: m.group(1) + "'" + m.group(2), text)
     return text
 
 
 def clean_justification_text(text):
     text = re.sub(r"```[a-zA-Z]*", "", str(text or ""))
-    text = re.sub(r"[{}[]*#]", "", text)
+    text = re.sub(r"[{}\[\]*#]", "", text)
     return fix_elisions(text.strip())
 
 
@@ -415,7 +395,7 @@ def display_aerated(text):
 def extract_info_by_mid(text):
     result = {}
     blocks = re.split(
-        r"(?im)^s*(Md+)s*:",
+        r"(?im)^\s*(M\d+)\s*:",
         text or "",
     )
     for i in range(1, len(blocks), 2):
@@ -442,7 +422,7 @@ def parse_cotes_input(text):
             continue
 
         match = re.fullmatch(
-            r"s*(Md+)s*:s*(.*?)s*",
+            r"\s*(M\d+)\s*:\s*(.*?)\s*",
             line,
             re.IGNORECASE,
         )
@@ -458,10 +438,10 @@ def parse_cotes_input(text):
         seen.add(mid)
 
         values = {}
-        pattern = r"([ABC])s*=s*(d+(?:[.,]d+)?)"
+        pattern = r"([ABC])\s*=\s*(\d+(?:[.,]\d+)?)"
         tokens = list(re.finditer(pattern, content, re.IGNORECASE))
         remainder = re.sub(pattern, "", content, flags=re.IGNORECASE)
-        remainder = re.sub(r"[s;]+", "", remainder)
+        remainder = re.sub(r"[\s;]+", "", remainder)
 
         if remainder:
             errors.append(f"{mid} : texte ou cote non reconnu.")
@@ -493,8 +473,8 @@ def parse_extra_input(text):
         if not line.strip():
             continue
         match = re.fullmatch(
-            r"s*(Md+)_EXTRAs*:s*([^=]+?)s*=s*"
-            r"(d+(?:[.,]d+)?)s*",
+            r"\s*(M\d+)_EXTRA\s*:\s*([^=]+?)\s*=\s*"
+            r"(\d+(?:[.,]\d+)?)\s*",
             line,
             re.IGNORECASE,
         )
@@ -632,7 +612,7 @@ def authenticate_user(email, password):
     return bool(
         row
         and len(row) > 1
-        and row == hash_password(password)[1]
+        and row[1] == hash_password(password)
     )
 
 
@@ -646,7 +626,7 @@ def check_session_token(token):
     if not token:
         return None
     for row in get_users_sheet().get_all_values()[1:]:
-        if len(row) > 4 and row == token:[4]
+        if len(row) > 4 and row[4] == token:
             return row[0]
     return None
 
@@ -730,10 +710,10 @@ def get_history_entries(email):
         get_history_sheet().get_all_values()[1:],
         start=2,
     ):
-        if len(row) < 6 or row.strip().lower() != normalized:[0]
+        if len(row) < 6 or row[0].strip().lower() != normalized:
             continue
         try:
-            data = json.loads(row) if row else {}[5]
+            data = json.loads(row[5]) if row[5] else {}
             if not isinstance(data, dict):
                 data = {}
         except (ValueError, TypeError):
@@ -741,11 +721,11 @@ def get_history_entries(email):
 
         entries.append({
             "row_number": row_number,
-            "email": row,[0]
-            "timestamp": row,[1]
-            "stage": row,[2]
-            "sport": row,[3]
-            "cote_cible": row,[4]
+            "email": row[0],
+            "timestamp": row[1],
+            "stage": row[2],
+            "sport": row[3],
+            "cote_cible": row[4],
             "session_data": data,
         })
     return entries
@@ -827,7 +807,7 @@ def delete_history_rows(row_numbers):
 
 
 def infer_resume_step(data, old_stage):
-    if data.get("final_result", {}).get("combo"):
+    if (data.get("final_result") or {}).get("combo"):
         return "final"
 
     explicit = data.get("step")
@@ -1089,7 +1069,7 @@ def configure_gemini():
 
 def extract_json(text):
     text = re.sub(
-        r"^```(?:json)?s*|s*```$",
+        r"^```(?:json)?\s*|\s*```$",
         "",
         str(text or "").strip(),
         flags=re.IGNORECASE,
@@ -1274,12 +1254,12 @@ def search_coupon(candidate_groups, target, max_size, tolerance):
             # candidats par compartiment.
             buckets = {}
             for state in expanded:
-                key = (len(state), round(state * 180))[0][2]
+                key = (len(state[2]), round(state[0] * 180))
                 buckets.setdefault(key, []).append(state)
 
             reduced = []
             for items in buckets.values():
-                items.sort(key=lambda item: item, reverse=True)[1]
+                items.sort(key=lambda item: item[1], reverse=True)
                 reduced.extend(items[:3])
 
             def partial_rank(state):
@@ -1295,37 +1275,37 @@ def search_coupon(candidate_groups, target, max_size, tolerance):
         else:
             states = expanded
 
-    nonempty = [state for state in states if state][2]
+    nonempty = [state for state in states if state[2]]
     if not nonempty:
         return None
 
     within = [
         state for state in nonempty
-        if lower <= math.exp(state) <= upper[0]
+        if lower <= math.exp(state[0]) <= upper
     ]
 
     if within:
         best = max(
             within,
             key=lambda state: (
-                state,[1]
-                -abs(math.exp(state) - target),[0]
+                state[1],
+                -abs(math.exp(state[0]) - target),
             ),
         )
     else:
         best = min(
             nonempty,
             key=lambda state: (
-                abs(math.exp(state) - target),[0]
-                -state,[1]
+                abs(math.exp(state[0]) - target),
+                -state[1],
             ),
         )
 
-    total = math.exp(best)[0]
+    total = math.exp(best[0])
     return {
-        "combo": list(best),[2]
+        "combo": list(best[2]),
         "total_odds": total,
-        "combined_probability": math.exp(best),[1]
+        "combined_probability": math.exp(best[1]),
         "diff": abs(total - target),
         "within_tolerance": lower <= total <= upper,
         "tolerance": tolerance,
@@ -1508,9 +1488,9 @@ if not S["logged_in"]:
             disabled=not (email.strip() and password),
         ):
             try:
-                if not re.fullmatch(r"[^@s]+@[^@s]+.[^@s]+", email):
+                if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
                     st.error("Saisissez une adresse e-mail valide.")
-                elif find_user_row(email):[0]
+                elif find_user_row(email)[0]:
                     st.error("Un compte existe déjà avec cet e-mail.")
                 else:
                     create_user(email, password)
@@ -1770,7 +1750,7 @@ if S["step"] == "setup":
                 for label, code in FOOTBALL_COMPETITIONS.items()
                 if code == S["competition"]
             ),
-            labels,[0]
+            labels[0],
         )
         key = widget_value("competition_foot", initial)
         label = st.selectbox(
@@ -2005,7 +1985,7 @@ elif S["step"] == "manual_entry":
                 previous.get("home", ""),
             )
             home = st.text_input(
-                f"{labels} — {mid}",[0]
+                f"{labels[0]} — {mid}",
                 key=key,
             )
         with right:
@@ -2014,7 +1994,7 @@ elif S["step"] == "manual_entry":
                 previous.get("away", ""),
             )
             away = st.text_input(
-                f"{labels} — {mid}",[1]
+                f"{labels[1]} — {mid}",
                 key=key,
             )
 
@@ -2079,9 +2059,7 @@ elif S["step"] == "info_request":
         )
 
     if not S["data_info_text"]:
-        S["data_info_text"] = "
-
-".join(
+        S["data_info_text"] = (chr(10) * 2).join(
             f"{match['mid']}: " for match in matches
         )
 
