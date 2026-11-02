@@ -2516,344 +2516,315 @@ elif S["step"] == "info_request":
 # ÉTAPE 4 — OPTIONS ET COTES
 # ============================================================
 
-elif S["step"] == "options_ready":
-    st.markdown("## 📊 Options et cotes réelles")
-    matches = S["relevant_matches"]
+CONFIDENCE_BADGES = {
+    "Excellent": "🟢 Excellent",
+    "Bon": "🟡 Bon",
+    "Moyen": "🟠 Moyen",
+    "Faible": "🔴 Faible",
+}
+
+
+def confidence_badge(option):
+    level = option.get("niveau_confiance", "Faible")
+    return CONFIDENCE_BADGES.get(level, CONFIDENCE_BADGES["Faible"])
+
+
+def render_option_card(letter, option):
+    if not isinstance(option, dict):
+        return
+
+    with st.container(border=True):
+        st.markdown(
+            f"**{option_label(letter)}** — "
+            f"{esc(option_display(option))}"
+        )
+        st.markdown(confidence_badge(option))
+
+        if option.get("ligne"):
+            st.caption(f"Ligne : {esc(option['ligne'])}")
+
+        if option.get("justification"):
+            st.caption(
+                esc(
+                    clean_justification_text(
+                        option["justification"]
+                    )
+                )
+            )
+
+
+def render_extra_card(extra):
+    if not isinstance(extra, dict):
+        return
+
+    with st.container(border=True):
+        st.markdown(
+            f"**EXTRA** — {esc(extra.get('description', ''))}"
+        )
+        st.markdown(confidence_badge(extra))
+
+        if extra.get("cote"):
+            st.caption(f"Cote : {extra['cote']}")
+
+        if extra.get("justification"):
+            st.caption(
+                esc(
+                    clean_justification_text(
+                        extra["justification"]
+                    )
+                )
+            )
+
+
+def run_options_analysis():
+    matches = S.get("relevant_matches", [])
 
     if not matches:
-        st.error(
-            "Aucun match à analyser. Relancez le paramétrage."
+        S["options_error"] = (
+            "Aucun match sélectionné pour l’analyse."
         )
-        st.stop()
+        return
 
-    if st.button("⬅️ Modifier les informations"):
-        S["step"] = "info_request"
-        st.rerun()
-
-    st.caption(
-        "Une régénération remplace les options et efface les "
-        "anciennes cotes, les EXTRA et le résultat."
-    )
-    st.button(
-        "🔄 Régénérer toutes les options et effacer "
-        "les anciennes cotes",
-        on_click=regenerate_options,
+    info_by_mid = extract_info_by_mid(
+        S.get("data_info_text", "")
     )
 
-    info = extract_info_by_mid(S["data_info_text"])
-    missing = missing_information(
-        S["data_info_text"], matches
-    )
-    if missing:
-        st.warning(
-            "Complétez d'abord les informations : "
-            + ", ".join(missing)
-        )
-        st.stop()
+    options_results = {}
+    extra_results = {}
+    errors = []
 
-    pending = [
-        match for match in matches
-        if match["mid"] not in S["options_results"]
-    ]
+    progress = st.progress(0, text="Analyse des matchs…")
 
-    if pending:
-        with st.spinner(
-            "Génération des options par Gemini..."
-        ):
-            progress = st.progress(0.0)
-            for index, match in enumerate(
-                pending, 1
-            ):
-                S["options_results"][
-                    match["mid"]
-                ] = generate_match_options(
-                    match,
-                    match.get(
-                        "sport", S["sport"]
-                    ),
-                    info.get(match["mid"], ""),
-                )
-                record_progress()
-                progress.progress(
-                    index / len(pending)
-                )
+    for index, match in enumerate(matches):
+        mid = match.get("mid")
+        info_text = info_by_mid.get(mid, "")
 
-    failed = []
-    for match in matches:
-        mid = match["mid"]
-        options = S["options_results"].get(mid, {})
-        st.markdown(
-            f"### {mid} — {match['home']} 🆚 "
-            f"{match['away']}"
-        )
-
-        badge = (
-            "<span class='badge-verified'>✅ "
-            "Rencontre issue d'une API</span>"
-            if match.get("date")
-            else "<span class='badge-manual'>⚠️ "
-            "Rencontre saisie manuellement</span>"
-        )
-        st.markdown(badge, unsafe_allow_html=True)
-
-        with st.expander(
-            f"📝 Informations de {mid}"
-        ):
-            st.text(info.get(mid, ""))
-
-        if options.get("_error"):
-            failed.append(mid)
-            st.error(
-                "Options indisponibles : "
-                + options["_error"]
+        try:
+            options_results[mid] = generate_match_options(
+                match,
+                S.get("data_sport", "Football"),
+                info_text,
             )
+        except Exception as error:
+            options_results[mid] = {
+                "synthese": "",
+                "_error": str(error)[:250],
+                "_diagnostics": [],
+            }
+            errors.append(f"{mid} : {str(error)[:200]}")
+
+        progress.progress(
+            (index + 1) / len(matches),
+            text=f"Analyse de {mid}…",
+        )
+
+    progress.progress(1.0, text="Analyse terminée.")
+
+    S["options_results"] = options_results
+    S["extra_results"] = extra_results
+    S["options_error"] = " | ".join(errors)
+    S["stage"] = "options_ready"
+
+
+def run_extra_analysis():
+    matches = S.get("relevant_matches", [])
+    info_by_mid = extract_info_by_mid(
+        S.get("data_info_text", "")
+    )
+
+    extra_inputs, extra_errors = parse_extra_input(
+        S.get("data_extra_text", "")
+    )
+
+    extra_results = {}
+
+    for match in matches:
+        mid = match.get("mid")
+        extras = extra_inputs.get(mid, [])
+
+        if not extras:
             continue
 
-        st.write(
-            "🔎 Analyse de l'Aigle : "
-            + fix_elisions(
-                options.get("synthese", "")
+        evaluated = []
+
+        for extra in extras:
+            result = evaluate_extra_market(
+                match,
+                extra.get("description", ""),
+                info_by_mid.get(mid, ""),
             )
-        )
-        if options.get("_diagnostics"):
-            with st.expander("⚠️ Diagnostics de génération"):
-                for diagnostic in options["_diagnostics"]:
-                    st.write(diagnostic) 
+            result["description"] = extra.get("description", "")
+            result["cote"] = extra.get("cote")
+            evaluated.append(result)
 
-        displayed = 0
-        display_diagnostics = list(
-            options.get("_diagnostics") or []
-        )
+        extra_results[mid] = evaluated
 
-        options_list = [
-                (letter, options.get(letter, {}))
-                for letter in ["A", "B", "C"]
-            ]
+    S["extra_results"] = extra_results
+    S["extra_error"] = " | ".join(extra_errors)
 
-        options_list.sort(
-                key=lambda item: normalize_probability(
-                    item[1].get("probabilite", 0)
-                ),
-                reverse=True,
-            )
 
-        best_letter, best_option = options_list[0]
-        best_probability = normalize_probability(
-                best_option.get("probabilite", 0)
-            )
+def render_options_step():
+    st.subheader("Étape 4 — Options et cotes")
 
-        st.markdown(
-                "<div class='option-card'>"
-                f"⭐ <b>Option la plus probable — {best_letter}</b><br>"
-                f"Marché : {esc(best_option.get('marche', ''))}<br>"
-                f"Résultat : {esc(best_option.get('resultat', ''))}<br>"
-                f"📊 Probabilité estimée : {best_probability:.1%}"
-                "</div>",
-                unsafe_allow_html=True,
-            )
+    matches = S.get("relevant_matches", [])
 
-        other_options = options_list[1:]
-
-        if other_options:
-                with st.expander("🔍 Voir les autres options générées"):
-                    for letter, option in other_options:
-                        probability = normalize_probability(
-                            option.get("probabilite", 0)
-                        )
-                        if not option.get("marche") or not option.get("resultat"):
-                            continue
-                        retained = probability >= S["threshold"]
-
-                        badge = (
-                            "<span class='badge-verified'>Retenue</span>"
-                            if retained
-                            else "<span class='badge-manual'>Non retenue</span>"
-                        )
-
-                        st.markdown(
-                            "<div class='option-card'>"
-                            f"<b>Option {letter}</b> {badge}<br>"
-                            f"Marché : {esc(option.get('marche', ''))}<br>"
-                            f"Résultat : {esc(option.get('resultat', ''))}<br>"
-                            f"📊 Probabilité estimée : {probability:.1%}"
-                            "</div>",
-                            unsafe_allow_html=True,
-                        )
-
-    if failed:
-        if st.button(
-            "🔄 Réessayer les générations échouées"
-        ):
-            for mid in failed:
-                S["options_results"].pop(mid, None)
-            st.rerun()
-
-    st.caption(
-        "Ces estimations ne sont pas des probabilités validées "
-        "par un modèle statistique calibré."
-    )
-
-    st.markdown("### 💰 Cotes réelles")
-    st.caption(
-        "Une ligne par match. Exemple : "
-        "M1: A=1.85 B=1.70 C=1.90. "
-        "Vous pouvez ne renseigner que les options disponibles."
-    )
-    key = widget_value(
-        "cotes_text", S["data_cotes_text"]
-    )
-    st.text_area(
-        "Cotes du bookmaker",
-        height=230,
-        key=key,
-        on_change=capture_text,
-        args=("data_cotes_text", key),
-    )
-    S["data_cotes_text"] = S[key]
-
-    st.markdown("### 💎 Marchés EXTRA")
-    st.caption(
-        "Optionnel : plusieurs lignes M1_EXTRA sont possibles "
-        "pour un même match (10 maximum). Décrivez exactement "
-        "le marché, la ligne et la période. Exemple : "
-        "M1_EXTRA: Boston Celtics Over 112.5 points, match "
-        "entier, prolongations incluses=1.85."
-    )
-    key = widget_value(
-        "extra_text", S["data_extra_text"]
-    )
-    st.text_area(
-        "Marchés supplémentaires",
-        height=130,
-        key=key,
-        on_change=capture_text,
-        args=("data_extra_text", key),
-    )
-    S["data_extra_text"] = S[key]
-
-    cotes, errors = parse_cotes_input(
-        S["data_cotes_text"]
-    )
-    extras, extra_errors = parse_extra_input(
-        S["data_extra_text"]
-    )
-    errors.extend(extra_errors)
-
-    known = {
-        match["mid"] for match in matches
-    }
-    unknown = (
-        set(cotes) | set(extras)
-    ) - known
-    if unknown:
-        errors.append(
-            "Identifiants inconnus : "
-            + ", ".join(sorted(unknown))
-        )
-
-    for match in matches:
-        for letter in cotes.get(
-            match["mid"], {}
-        ):
-            try:
-                validate_option(
-                    S["options_results"]
-                    .get(match["mid"], {})
-                    .get(letter),
-                    match,
-                    info.get(match["mid"], ""),
-                )
-            except ValueError:
-                errors.append(
-                    f"{match['mid']} {letter} : aucune "
-                    "proposition complète affichée. Retirez "
-                    "sa cote ou régénérez les options."
-                )
-
-    uncovered = [
-        mid for mid in known
-        if not cotes.get(mid)
-        and mid not in extras
-    ]
-    if uncovered:
-        st.info(
-            "Sans cote ni marché EXTRA, ces matchs seront "
-            "exclus : " + ", ".join(sorted(uncovered))
-        )
-
-    for error in errors:
-        st.warning(error)
+    if not matches:
+        st.warning("Aucun match sélectionné.")
+        return
 
     st.info(
-        f"Seuil individuel : "
-        f"{validity_rate(S['cote_cible']):.0%}. "
-        f"Marge cible : ±{S['tolerance']:.0%}. "
-        "Une seule sélection par match sera retenue."
+        "L’application propose plusieurs scénarios par match. "
+        "Tu peux ensuite saisir les cotes et ajouter des marchés EXTRA."
     )
 
-    confirm_key = widget_value(
-        "confirm_markets", False
-    )
-    confirmed = st.checkbox(
-        "J'ai vérifié que les cotes correspondent exactement "
-        "aux résultats, lignes, périodes et règles du "
-        "bookmaker.",
-        key=confirm_key,
-    )
-    st.caption(
-        "Une ligne entière peut comporter un remboursement "
-        "selon le règlement. Le calcul de probabilité combinée "
-        "ne modélise pas séparément les remboursements. Si la "
-        "ligne ou le périmètre diffère, ajoutez le marché exact "
-        "en EXTRA pour le réévaluer."
-    )
+    if S.get("options_error"):
+        st.error(S["options_error"])
+
+    if S.get("extra_error"):
+        st.error(S["extra_error"])
 
     if st.button(
-        "🚩 Finaliser l'analyse",
-        disabled=(
-            bool(errors)
-            or not (cotes or extras)
-            or bool(failed)
-            or not confirmed
-        ),
+        "Lancer l’analyse des options",
+        type="primary",
+        use_container_width=True,
     ):
-        try:
-            with st.spinner(
-                "Évaluation des marchés EXTRA et recherche "
-                "du coupon..."
-            ):
-                result = build_final_result(
-                    cotes, extras
-                )
+        with st.spinner("Analyse des scénarios…"):
+            run_options_analysis()
 
-            for notice in S.get(
-                "evaluation_notices", []
-            ):
-                st.warning(notice)
+        if S.get("data_extra_text", "").strip():
+            with st.spinner("Analyse des marchés EXTRA…"):
+                run_extra_analysis()
 
-            if result is None:
-                st.error(
-                    "Aucune option n'atteint le seuil "
-                    "individuel requis avec une cote "
-                    "exploitable. Le seuil n'a pas été abaissé."
-                )
-            else:
-                S["final_result"] = result
-                S["final_justification"] = ""
-                S[
-                    "final_justification_combo"
-                ] = None
-                S["step"] = "final"
-                record_progress()
-                st.rerun()
-        except Exception as error:
-            st.error(
-                "Finalisation impossible : "
-                + str(error)[:350]
+        st.rerun()
+
+    options_results = S.get("options_results", {})
+    extra_results = S.get("extra_results", {})
+
+    if not options_results:
+        return
+
+    st.divider()
+    st.markdown("### Scénarios proposés")
+
+    for match in matches:
+        mid = match.get("mid")
+        result = options_results.get(mid, {})
+
+        with st.container(border=True):
+            teams = " vs ".join(
+                [
+                    match.get("home", ""),
+                    match.get("away", ""),
+                ]
             )
 
-    record_progress()
+            st.markdown(
+                f"### {mid} — {esc(teams)}"
+            )
 
+            if result.get("_error"):
+                st.error(result["_error"])
+                continue
+
+            if result.get("synthese"):
+                st.write(
+                    esc(
+                        clean_justification_text(
+                            result["synthese"]
+                        )
+                    )
+                )
+
+            for letter in ("A", "B", "C", "D", "E"):
+                option = result.get(letter)
+
+                if isinstance(option, dict):
+                    render_option_card(letter, option)
+
+            for extra in extra_results.get(mid, []):
+                render_extra_card(extra)
+
+    st.divider()
+    st.markdown("### Saisie des cotes")
+
+    st.caption(
+        "Format attendu :
+
+"
+        "M1: A=1.56
+
+"
+        "M2: A=1.85 B=1.70"
+    )
+
+    cotes_key = widget_value(
+        "cotes",
+        S.get("data_cotes_text", ""),
+    )
+
+    cotes_text = st.text_area(
+        "Cotes des options",
+        value=S.get("data_cotes_text", ""),
+        height=180,
+        key=cotes_key,
+        on_change=capture_text,
+        args=("data_cotes_text", cotes_key),
+    )
+
+    parsed_cotes, cotes_errors = parse_cotes_input(cotes_text)
+    S["data_cotes_parsed"] = parsed_cotes
+
+    if cotes_errors:
+        st.error("
+".join(cotes_errors))
+
+    st.markdown("### Marchés EXTRA")
+
+    st.caption(
+        "Format attendu :
+
+"
+        "M1_EXTRA: Total_Under_225.5=1.66
+
+"
+        "M2_EXTRA: Joueur_Over_25_points=1.80"
+    )
+
+    extra_key = widget_value(
+        "extra",
+        S.get("data_extra_text", ""),
+    )
+
+    extra_text = st.text_area(
+        "Marchés EXTRA",
+        value=S.get("data_extra_text", ""),
+        height=140,
+        key=extra_key,
+        on_change=capture_text,
+        args=("data_extra_text", extra_key),
+    )
+
+    if extra_text.strip() and extra_text != S.get(
+        "data_extra_text",
+        "",
+    ):
+        if st.button(
+            "Analyser les marchés EXTRA",
+            use_container_width=True,
+        ):
+            with st.spinner("Analyse des marchés EXTRA…"):
+                run_extra_analysis()
+
+            st.rerun()
+
+    if st.button(
+        "Passer à l’étape finale",
+        type="primary",
+        use_container_width=True,
+    ):
+        S["stage"] = "final"
+        st.rerun()
+    
 
 # ============================================================
 # ÉTAPE 5 — RÉSULTAT
