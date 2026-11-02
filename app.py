@@ -89,8 +89,8 @@ i[class*="material"] {
     display: inline-block;
 }
 .badge-manual {
-    background-color: #fff3cd;
-    color: #856404;
+    background-color: #000000;
+    color: #ffffff;
 }
 .badge-verified {
     background-color: #d4edda;
