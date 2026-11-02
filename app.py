@@ -2840,8 +2840,8 @@ elif S["step"] == "options_ready":
                 reverse=True,
             )
 
-            best_letter, best_option = options_list[0]
-            best_probability = normalize_probability(
+        best_letter, best_option = options_list[0]
+        best_probability = normalize_probability(
                 best_option.get("probabilite", 0)
             )
 
