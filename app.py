@@ -1438,14 +1438,17 @@ Sport : {sport}
 Informations de ce match : {user_info_text}
 
 Examine jusqu'à 6 propositions distinctes et défendables, puis retiens
-uniquement les 1 à 3 scénarios les mieux étayés. Varie les marchés selon
-les données disponibles, pas selon un trio imposé.
+2 à 3 scénarios les mieux étayés. Vise systématiquement 3 propositions
+quand au moins 3 marchés sont évaluables à partir des informations
+fournies. Varie les marchés selon les données disponibles, pas selon un
+trio imposé.
 
 Règles obligatoires :
 - Ne propose un scénario que s'il est fondé sur les informations fournies.
 - Ne transforme pas un manque de données en probabilité de zéro : exclue
 simplement le scénario s'il n'est pas évaluable.
-- Ne force pas trois propositions si une ou deux seulement sont défendables.
+- Retiens 3 propositions dès que 3 marchés sont évaluables ; sinon,
+retiens le nombre maximum de scénarios réellement défendables.
 - Pour chaque scénario retenu, attribue un niveau de confiance :
 "élevé", "moyen" ou "faible".
 - Confiance élevée : plusieurs données concordantes et peu d'incertitudes.
@@ -2822,6 +2825,10 @@ elif S["step"] == "options_ready":
                 options.get("synthese", "")
             )
         )
+        if options.get("_diagnostics"):
+            with st.expander("⚠️ Diagnostics de génération"):
+                for diagnostic in options["_diagnostics"]:
+                    st.write(diagnostic) 
 
         displayed = 0
         display_diagnostics = list(
