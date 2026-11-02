@@ -375,16 +375,27 @@ def display_aerated(text):
             st.write(paragraph)
 
 
-
 def extract_info_by_mid(text):
     result = {}
     current = None
 
+    invisible = (
+        chr(8206)
+        + chr(8207)
+        + chr(8234)
+        + chr(8235)
+        + chr(8236)
+        + chr(8237)
+    )
+
+    pattern = (
+        "^[" + " " + chr(9) + invisible + "]*"
+        + "(M[0-9]+)"
+        + "[" + " " + chr(9) + invisible + "]*:"
+    )
+
     for line in (text or "").splitlines():
-        match = re.match(
-            r"^[s‎‏‪-‮]*(Md+)s*:",
-            line
-        )
+        match = re.match(pattern, line)
         if match:
             current = match.group(1).upper()
             result[current] = ""
