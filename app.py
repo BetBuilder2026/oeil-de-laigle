@@ -2827,207 +2827,189 @@ def render_options_step():
     
 
 # ============================================================
-# ÉTAPE 5 — RÉSULTAT
+# ÉTAPE 5 — RÉSULTAT FINAL
 # ============================================================
 
-elif S["step"] == "final":
-    st.markdown("## 🚩 Analyse finalisée")
-    result = S.get("final_result")
+def render_final_selection(selection, match):
+    option = selection.get("option", {})
+    letter = selection.get("lettre", "")
+    cote = selection.get("cote")
 
-    if not result or not result.get("combo"):
-        st.error(
-            "Aucun coupon enregistré dans cette analyse."
+    with st.container(border=True):
+        teams = " vs ".join(
+            [
+                match.get("home", ""),
+                match.get("away", ""),
+            ]
         )
-        if st.button("↩️ Revenir aux options"):
-            S["step"] = "options_ready"
-            st.rerun()
-        st.stop()
-
-    for notice in result.get(
-        "evaluation_notices", []
-    ):
-        st.warning(notice)
-
-    combo = result["combo"]
-    total = math.prod(
-        float(item["chosen_cote"])
-        for item in combo
-    )
-    combined = math.prod(
-        normalize_probability(item["chosen_prob"])
-        for item in combo
-    )
-    tolerance = result.get(
-        "tolerance", S["tolerance"]
-    )
-    within = (
-        S["cote_cible"] * (1 - tolerance)
-        <= total
-        <= S["cote_cible"] * (1 + tolerance)
-    )
-
-    if within:
-        st.success(
-            f"Coupon proposé — cote totale : "
-            f"{total:.2f} | cible : "
-            f"{S['cote_cible']:.2f}"
-        )
-    else:
-        st.warning(
-            f"Aucun coupon dans la marge "
-            f"±{tolerance:.0%} n'a été trouvé par la "
-            "recherche bornée. Alternative la plus proche "
-            f"trouvée : {total:.2f} pour une cible de "
-            f"{S['cote_cible']:.2f}."
-        )
-
-    st.write(
-        f"Nombre de sélections : {len(combo)}"
-    )
-    st.write(
-        "Probabilité combinée estimée sous hypothèse "
-        f"d'indépendance : {combined:.2%}"
-    )
-    st.caption(
-        "Il s'agit du produit des estimations individuelles, "
-        "pas de leur moyenne. Les dépendances entre résultats "
-        "et les erreurs d'estimation ne sont pas modélisées. "
-        "Ce chiffre n'est pas une garantie de réussite."
-    )
-
-    saved_threshold = result.get("threshold")
-    current_threshold = validity_rate(
-        S["cote_cible"]
-    )
-    if (
-        saved_threshold is None
-        or abs(
-            saved_threshold - current_threshold
-        ) > 0.00001
-    ):
-        st.info(
-            "Ce résultat provient d'une ancienne analyse. "
-            "Recalculez-le pour appliquer les nouveaux seuils."
-        )
-
-    for item in combo:
-        outcome = item.get("chosen_resultat", "")
-        confidence = item.get(
-            "chosen_confiance", "faible"
-        )
-        confidence_emoji = {
-            "élevé": "🟢",
-            "moyen": "🟡",
-            "faible": "🔴",
-        }.get(confidence, "🔴")
 
         st.markdown(
-            "<div class='option-card'>"
-            f"🎯 <b>{esc(item['mid'])} — "
-            f"{esc(item.get('home', ''))} contre "
-            f"{esc(item.get('away', ''))}</b><br>"
-            f"Marché : "
-            f"{esc(item.get('chosen_marche', ''))}<br>"
-            f"Période : "
-            f"{esc(item.get('chosen_periode', 'non enregistrée'))} — "
-            f"prolongations : "
-            f"{esc(item.get('chosen_prolongations', 'à vérifier'))}<br>"
-            + (
-                f"Résultat : {esc(outcome)}<br>"
-                if outcome else ""
-            )
-            + f"Cote : "
-            f"{float(item['chosen_cote']):.2f}<br>"
-            f"📊 Probabilité estimée : "
-            f"{normalize_probability(item['chosen_prob']):.1%}<br>"
-            f"{confidence_emoji} Niveau de confiance : "
-            f"{esc(confidence)}"
-            "</div>",
-            unsafe_allow_html=True,
+            f"**{esc(teams)}** — {esc(mid_label(selection.get('mid')))}"
         )
 
-    signature = fingerprint(combo)
+        if letter == "EXTRA":
+            st.markdown(
+                f"**Marché EXTRA :** "
+                f"{esc(option.get('marche', ''))}"
+            )
+        else:
+            st.markdown(
+                f"**{option_label(letter)} :** "
+                f"{esc(option_display(option))}"
+            )
 
-    if not S["final_justification"]:
-        with st.spinner(
-            "Rédaction de la justification..."
-        ):
-            justification_result = {
-                **result,
-                "total_odds": total,
-                "combined_probability": combined,
-                "within_tolerance": within,
-            }
-            S["final_justification"] = (
-                generate_final_justification(
-                    justification_result
+        st.markdown(confidence_badge(option))
+
+        if valid_odds(cote):
+            st.markdown(f"**Cote : {cote}**")
+
+        justification = selection.get("justification") or option.get(
+            "justification",
+            "",
+        )
+
+        if justification:
+            st.caption(
+                esc(
+                    clean_justification_text(justification)
                 )
             )
-        S["final_justification_combo"] = signature
 
-    st.markdown("### 🦅 Analyse de l'Aigle")
-    display_aerated(
-        fix_elisions(S["final_justification"])
+
+def mid_label(mid):
+    for match in S.get("relevant_matches", []):
+        if match.get("mid") == mid:
+            return (
+                str(match.get("home", ""))
+                + " vs "
+                + str(match.get("away", ""))
+            )
+
+    return mid
+
+
+def run_final_analysis():
+    matches = S.get("relevant_matches", [])
+
+    if not matches:
+        S["final_error"] = (
+            "Aucun match sélectionné pour l’analyse finale."
+        )
+        return
+
+    cote_cible = S.get("cote_cible", 2.0)
+    tolerance = S.get("tolerance", DEFAULT_TOLERANCE)
+
+    selections, synthesis, errors = build_final_coupon(
+        matches,
+        S.get("options_results", {}),
+        S.get("extra_results", {}),
+        cote_cible,
+        tolerance,
     )
 
-    selected_mids = {
-        item["mid"] for item in combo
-    }
-    with st.expander(
-        "📋 Tous les matchs et options évalués"
+    S["final_result"] = selections
+    S["final_justification"] = synthesis
+    S["final_error"] = " | ".join(errors)
+
+
+def render_final_step():
+    st.subheader("Étape 5 — Résultat final")
+
+    cote_cible = S.get("cote_cible", 2.0)
+    tolerance = S.get("tolerance", DEFAULT_TOLERANCE)
+
+    st.info(
+        f"Cote cible : **{cote_cible}** — "
+        f"Marge acceptée : **± {tolerance}**"
+    )
+
+    if S.get("final_error"):
+        st.error(S["final_error"])
+
+    if st.button(
+        "Générer le coupon final",
+        type="primary",
+        use_container_width=True,
     ):
-        for match in result.get(
-            "all_evaluated", []
-        ):
-            mid = match.get("mid", "")
-            st.write(
-                f"{mid} — "
-                f"{match.get('home', '')} contre "
-                f"{match.get('away', '')}"
+        with st.spinner("Construction du coupon final…"):
+            run_final_analysis()
+
+        st.rerun()
+
+    selections = S.get("final_result")
+
+    if not selections:
+        st.warning(
+            "Aucun coupon final n’a encore été généré."
+        )
+        return
+
+    total = compute_final_odds(selections)
+    min_odds = min_odds_for(len(selections))
+    target_min = round(float(cote_cible) - float(tolerance), 2)
+    target_max = round(float(cote_cible) + float(tolerance), 2)
+
+    st.markdown("### Coupon proposé")
+
+    if S.get("final_justification"):
+        st.write(
+            esc(
+                clean_justification_text(
+                    S["final_justification"]
+                )
             )
-            candidates = match.get("candidates")
-            if isinstance(candidates, list):
-                for candidate in candidates:
-                    st.write(
-                        f"{candidate.get('letter', '')} : "
-                        f"{candidate.get('chosen_marche', '')} — "
-                        f"{candidate.get('chosen_resultat', '')} | "
-                        f"cote "
-                        f"{candidate.get('chosen_cote')} | "
-                        f"estimation "
-                        f"{candidate.get('chosen_prob', 0):.1%}"
-                    )
-                st.caption(
-                    "Présent dans le coupon"
-                    if mid in selected_mids
-                    else match.get("status", "")
-                )
-            else:
-                st.write(
-                    f"Marché : "
-                    f"{match.get('chosen_marche', '-')} | "
-                    f"cote : "
-                    f"{match.get('chosen_cote', '-')} | "
-                    f"statut : "
-                    f"{match.get('status', '')}"
-                )
+        )
 
-    left, right = st.columns(2)
-    with left:
-        if st.button(
-            "↩️ Modifier les cotes et recalculer"
-        ):
-            S["step"] = "options_ready"
-            st.rerun()
-    with right:
-        if st.button("🎯 Nouvelle analyse"):
-            reset_analysis()
-            st.rerun()
+    matches_by_mid = {
+        match.get("mid"): match
+        for match in S.get("relevant_matches", [])
+    }
 
-    record_progress()
+    for selection in selections:
+        match = matches_by_mid.get(
+            selection.get("mid"),
+            {},
+        )
+        render_final_selection(selection, match)
 
-else:
-    st.error("Étape inconnue.")
-    if st.button("Revenir au paramétrage"):
-        S["step"] = "setup"
+    st.divider()
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.metric("Nombre de sélections", len(selections))
+
+    with col2:
+        st.metric("Cote totale", total)
+
+    with col3:
+        st.metric("Cote minimale", min_odds)
+
+    if total < target_min or total > target_max:
+        st.warning(
+            f"La cote totale est hors de la plage demandée : "
+            f"{target_min} à {target_max}."
+        )
+    else:
+        st.success(
+            "Le coupon respecte la cote cible et les règles de cotes."
+        )
+
+    st.divider()
+
+    if st.button(
+        "Recalculer le coupon",
+        use_container_width=True,
+    ):
+        with st.spinner("Nouvelle recherche de coupon…"):
+            run_final_analysis()
+
+        st.rerun()
+
+    if st.button(
+        "Retour à l’étape 4",
+        use_container_width=True,
+    ):
+        S["stage"] = "options_ready"
         st.rerun()
