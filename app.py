@@ -2698,9 +2698,9 @@ elif S["step"] == "info_request":
         st.rerun()
 
     record_progress()
-    st.write("DEBUG 1 — début du texte :", repr(S["data_infotext"][:150]))
-    st.write("DEBUG 2 — sections détectées :", list(extract_info_by_mid(S["data_infotext"]).keys()))
-    st.write("DEBUG 3 — matchs attendus :", [m["mid"] for m in matches])
+    st.write("DEBUG 1 — début du texte :", repr(S.get("data_infotext", "")[:150]))
+    st.write("DEBUG 2 — sections détectées :", list(extract_info_by_mid(S.get("data_infotext", "")).keys()))
+    st.write("DEBUG 3 — matchs attendus :", [m.get("mid") for m in matches])
     st.write("DEBUG 4 — sections manquantes :", missing)
 
 
