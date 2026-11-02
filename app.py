@@ -2828,84 +2828,58 @@ elif S["step"] == "options_ready":
             options.get("_diagnostics") or []
         )
 
-        for letter in ("A", "B", "C"):
-            raw = options.get(letter)
-            if raw is None:
-                continue
-            try:
-                option = validate_option(
-                    raw,
-                    match,
-                    info.get(mid, ""),
-                )
-            except ValueError as error:
-                display_diagnostics.append(
-                    f"{letter} : {error}"
-                )
-                continue
+            options_list = [
+                (letter, options.get(letter, {}))
+                for letter in ["A", "B", "C"]
+            ]
 
-            displayed += 1
-            confidence = option.get(
-                "niveau_confiance", "faible"
+            options_list.sort(
+                key=lambda item: normalize_probability(
+                    item[1].get("probabilite", 0)
+                ),
+                reverse=True,
             )
-            confidence_emoji = {
-                "élevé": "🟢",
-                "moyen": "🟡",
-                "faible": "🔴",
-            }.get(confidence, "🔴")
+
+            best_letter, best_option = options_list[0]
+            best_probability = normalize_probability(
+                best_option.get("probabilite", 0)
+            )
 
             st.markdown(
                 "<div class='option-card'>"
-                f"🎯 <b>Option {letter}</b> — "
-                f"{esc(option['marche'])}<br>"
-                f"Résultat : "
-                f"{esc(option['resultat'])}<br>"
-                f"Période : "
-                f"{esc(option['periode'])} — prolongations : "
-                f"{esc(option['prolongations'])}<br>"
-                f"📊 Probabilité estimée : "
-                f"{option['probabilite']:.1%}<br>"
-                f"{confidence_emoji} Niveau de confiance : "
-                f"{esc(confidence)}<br>"
-                f"Appui de l'analyse : "
-                f"{esc(option['justification'])}<br>"
-                "Proposition non vérifiée chez le bookmaker."
+                f"⭐ <b>Option la plus probable — {best_letter}</b><br>"
+                f"Marché : {esc(best_option.get('marche', ''))}<br>"
+                f"Résultat : {esc(best_option.get('resultat', ''))}<br>"
+                f"📊 Probabilité estimée : {best_probability:.1%}"
                 "</div>",
                 unsafe_allow_html=True,
             )
 
-        if displayed < 3:
-            st.info(
-                f"{displayed} proposition(s) retenue(s) pour "
-                "ce match. Vous pouvez utiliser celles "
-                "disponibles, ajouter un EXTRA précis ou "
-                "compléter les informations avant une "
-                "régénération."
-            )
-            if options.get("_complement"):
-                st.caption(
-                    "Complément utile : "
-                    + str(options["_complement"])
-                )
+            other_options = options_list[1:]
 
-        if display_diagnostics:
-            with st.expander(
-                f"Détails de génération — {mid}"
-            ):
-                for message in dict.fromkeys(
-                    display_diagnostics
-                ):
-                    st.write(message)
+            if other_options:
+                with st.expander("🔍 Voir les autres options générées"):
+                    for letter, option in other_options:
+                        probability = normalize_probability(
+                            option.get("probabilite", 0)
+                        )
+                        retained = probability >= S["threshold"]
 
-        if (
-            options.get("_market_version")
-            != MARKET_FORMAT_VERSION
-        ):
-            st.caption(
-                "Options d'une version précédente : "
-                "régénérez-les pour utiliser la nouvelle "
-                "sélection des candidats."
-            )
+                        badge = (
+                            "<span class='badge-verified'>Retenue</span>"
+                            if retained
+                            else "<span class='badge-manual'>Non retenue</span>"
+                        )
+
+                        st.markdown(
+                            "<div class='option-card'>"
+                            f"<b>Option {letter}</b> {badge}<br>"
+                            f"Marché : {esc(option.get('marche', ''))}<br>"
+                            f"Résultat : {esc(option.get('resultat', ''))}<br>"
+                            f"📊 Probabilité estimée : {probability:.1%}"
+                            "</div>",
+                            unsafe_allow_html=True,
+                        )
 
     if failed:
         if st.button(
