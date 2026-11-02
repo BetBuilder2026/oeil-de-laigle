@@ -378,11 +378,12 @@ def display_aerated(text):
 def extract_info_by_mid(text):
     result = {}
     blocks = re.split(
-        r"(?im)^s*(Md+)s*:",
-        text or "",
+        r"(?im)^[s‎‏‪-‮]*(Md+)s*:",
+        text or ""
     )
     for i in range(1, len(blocks), 2):
-        result[blocks[i].upper()] = blocks[i + 1].strip()
+        mid = blocks[i].upper()
+        result[mid] = blocks[i + 1].strip()
     return result
 
 
