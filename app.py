@@ -377,14 +377,24 @@ def display_aerated(text):
 
 def extract_info_by_mid(text):
     result = {}
-    blocks = re.split(
-        r"(?im)^[s‎‏‪-‮]*(Md+)s*:",
-        text or ""
-    )
-    for i in range(1, len(blocks), 2):
-        mid = blocks[i].upper()
-        result[mid] = blocks[i + 1].strip()
-    return result
+    current = None
+
+    for line in (text or "").splitlines():
+        match = re.match(
+            r"^[s‎‏‪-‮]*(Md+)s*:",
+            line
+        )
+        if match:
+            current = match.group(1).upper()
+            result[current] = ""
+        elif current:
+            result[current] += line + "
+"
+
+    return {
+        mid: content.strip()
+        for mid, content in result.items()
+    }
 
 
 def missing_information(text, matches):
