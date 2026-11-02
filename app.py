@@ -132,10 +132,11 @@ HIGH_ODDS_THRESHOLD = 14.0
 HIGH_ODDS_CONFIDENCE = 0.68
 DEFAULT_TOLERANCE = 0.10
 
-# Recherche bornée : plusieurs milliers d'états sont conservés
-# à chaque étape, pas toutes les combinaisons possibles.
 SEARCH_BEAM_WIDTH = 6000
 SCHEMA_VERSION = 2
+
+MARKET_FORMAT_VERSION = 3
+MAX_EXTRA_PER_MATCH = 10
 
 SPORT_LIST = [
     "Football",
@@ -183,8 +184,13 @@ Si les données ne permettent pas une estimation défendable, indique-le
 et utilise probabilite=null avec une explication, jamais zéro par défaut.
 Ne gonfle jamais une probabilité pour atteindre le seuil demandé.
 Les probabilités sont des estimations non calibrées, pas des garanties.
+Rédige exclusivement en français. N'utilise jamais un mot, une expression
+ou une tournure anglaise lorsqu'une équivalence française existe.
+Les noms propres, compétitions, joueurs et termes techniques sans traduction
+française établie peuvent rester en anglais.
 Écris un français correct avec les accents et les apostrophes d'élision.
 """
+
 
 ANALYSIS_DEFAULTS = {
     "schema_version": SCHEMA_VERSION,
@@ -329,15 +335,36 @@ def determine_mode_params(cote_cible):
 
 def fix_elisions(text):
     text = str(text or "").replace("’", "'").replace("ʼ", "'")
-    text = re.sub(r"\b([ldjcmnstLDJCMNST])\s*'\s*(?=\w)", lambda m: m.group(1) + "'", text)
-    for letters, words in [("Ll", "analyse|équipe|absence|attaque|objectif|utilisateur|application|historique"), ("Dd", "analyse|équipe|informations|information|incertitude|ailleurs|abord"), ("Cc", "est|était"), ("Jj", "ai|avais")]:
-        text = re.sub(rf"\b([{letters}])\s+({words})\b", lambda m: m.group(1)+"'"+m.group(2), text)
+    text = re.sub(
+        r"\b([ldjcmnstLDJCMNST])s*'s*(?=w)",
+        lambda m: m.group(1) + "'",
+        text,
+    )
+    for letters, words in [
+        (
+            "Ll",
+            "analyse|équipe|absence|attaque|objectif|utilisateur|"
+            "application|historique",
+        ),
+        (
+            "Dd",
+            "analyse|équipe|informations|information|incertitude|"
+            "ailleurs|abord",
+        ),
+        ("Cc", "est|était"),
+        ("Jj", "ai|avais"),
+    ]:
+        text = re.sub(
+            rf"\b([{letters}])s+({words})\b",
+            lambda m: m.group(1) + "'" + m.group(2),
+            text,
+        )
     return text
 
 
 def clean_justification_text(text):
     text = re.sub(r"```[a-zA-Z]*", "", str(text or ""))
-    text = re.sub(r"[{}\[\]*#]", "", text)
+    text = re.sub(r"[{}[]*#]", "", text)
     return fix_elisions(text.strip())
 
 
@@ -351,7 +378,7 @@ def display_aerated(text):
 def extract_info_by_mid(text):
     result = {}
     blocks = re.split(
-        r"(?im)^\s*(M\d+)\s*:",
+        r"(?im)^s*(Md+)s*:",
         text or "",
     )
     for i in range(1, len(blocks), 2):
@@ -378,35 +405,47 @@ def parse_cotes_input(text):
             continue
 
         match = re.fullmatch(
-            r"\s*(M\d+)\s*:\s*(.*?)\s*",
+            r"s*(Md+)s*:s*(.*?)s*",
             line,
             re.IGNORECASE,
         )
         if not match:
-            errors.append(f"Ligne {number} : format M1: A=1.50 attendu.")
+            errors.append(
+                f"Ligne {number} : format M1: A=1.50 attendu."
+            )
             continue
 
         mid, content = match.groups()
         mid = mid.upper()
         if mid in seen:
-            errors.append(f"{mid} : plusieurs lignes pour le même match.")
+            errors.append(
+                f"{mid} : plusieurs lignes pour le même match."
+            )
             continue
         seen.add(mid)
 
         values = {}
-        pattern = r"([ABC])\s*=\s*(\d+(?:[.,]\d+)?)"
-        tokens = list(re.finditer(pattern, content, re.IGNORECASE))
-        remainder = re.sub(pattern, "", content, flags=re.IGNORECASE)
-        remainder = re.sub(r"[\s;]+", "", remainder)
+        pattern = r"([ABC])s*=s*(d+(?:[.,]d+)?)"
+        tokens = list(
+            re.finditer(pattern, content, re.IGNORECASE)
+        )
+        remainder = re.sub(
+            pattern, "", content, flags=re.IGNORECASE
+        )
+        remainder = re.sub(r"[s;]+", "", remainder)
 
         if remainder:
-            errors.append(f"{mid} : texte ou cote non reconnu.")
+            errors.append(
+                f"{mid} : texte ou cote non reconnu."
+            )
 
         for token in tokens:
             letter = token.group(1).upper()
             value = float(token.group(2).replace(",", "."))
             if letter in values:
-                errors.append(f"{mid} : option {letter} répétée.")
+                errors.append(
+                    f"{mid} : option {letter} répétée."
+                )
             if not valid_odds(value):
                 errors.append(
                     f"{mid} : la cote {letter} doit dépasser 1."
@@ -423,25 +462,52 @@ def parse_cotes_input(text):
 
 def parse_extra_input(text):
     result, errors = {}, []
-    for number, line in enumerate((text or "").splitlines(), 1):
+
+    for number, line in enumerate(
+        (text or "").splitlines(), 1
+    ):
         if not line.strip():
             continue
-        match = re.fullmatch(r"\s*(M\d+)_EXTRA\s*:\s*(.+)\s*=\s*(\d+(?:[.,]\d+)?)\s*", line, re.IGNORECASE)
+
+        match = re.fullmatch(
+            r"s*(Md+)_EXTRAs*:s*(.+)s*=s*"
+            r"(d+(?:[.,]d+)?)s*",
+            line,
+            re.IGNORECASE,
+        )
         if not match:
-            errors.append(f"EXTRA ligne {number} : format M1_EXTRA: description complète=1.65 attendu.")
+            errors.append(
+                f"EXTRA ligne {number} : format "
+                "M1_EXTRA: description complète=1.65 attendu."
+            )
             continue
+
         mid, name, value = match.groups()
         mid, name = mid.upper(), name.strip()
         odds = float(value.replace(",", "."))
         items = result.setdefault(mid, [])
+
         if not valid_odds(odds):
-            errors.append(f"{mid} : cote EXTRA supérieure à 1 requise.")
+            errors.append(
+                f"{mid} : cote EXTRA supérieure à 1 requise."
+            )
         elif len(items) >= MAX_EXTRA_PER_MATCH:
-            errors.append(f"{mid} : maximum {MAX_EXTRA_PER_MATCH} EXTRA.")
-        elif any(item["marche"].casefold() == name.casefold() for item in items):
-            errors.append(f"{mid} : marché EXTRA répété.")
+            errors.append(
+                f"{mid} : maximum {MAX_EXTRA_PER_MATCH} EXTRA."
+            )
+        elif any(
+            item["marche"].casefold() == name.casefold()
+            for item in items
+        ):
+            errors.append(
+                f"{mid} : marché EXTRA répété."
+            )
         else:
-            items.append({"marche":name, "cote":odds})
+            items.append({
+                "marche": name,
+                "cote": odds,
+            })
+
     return result, errors
 
 
@@ -493,8 +559,6 @@ def capture_text(field, widget_key):
             S["final_result"] = None
             S["final_justification"] = ""
             S["final_justification_combo"] = None
-
-
 # ============================================================
 # GOOGLE SHEETS ET COMPTES
 # ============================================================
@@ -727,7 +791,9 @@ def group_entries_by_analysis(entries):
         result.append({
             "analysis_id": aid,
             "latest": rows[-1],
-            "row_numbers": [row["row_number"] for row in rows],
+            "row_numbers": [
+                row["row_number"] for row in rows
+            ],
         })
     return sorted(
         result,
@@ -739,7 +805,6 @@ def group_entries_by_analysis(entries):
 
 
 def delete_history_rows(row_numbers):
-    # Vérification de propriété avant suppression.
     owned = {
         entry["row_number"]
         for entry in get_history_entries(S["user_email"])
@@ -781,13 +846,16 @@ def resume_analysis(entry):
         entry["email"].strip().lower()
         != S["user_email"].strip().lower()
     ):
-        raise ValueError("Cette analyse appartient à un autre compte.")
+        raise ValueError(
+            "Cette analyse appartient à un autre compte."
+        )
 
     data = entry["session_data"]
     if not data:
-        raise ValueError("La sauvegarde ne contient pas de données lisibles.")
+        raise ValueError(
+            "La sauvegarde ne contient pas de données lisibles."
+        )
 
-    # Empêche .get() sur None dans les anciennes sauvegardes.
     safe_data = copy.deepcopy(data)
     if not isinstance(safe_data.get("final_result"), dict):
         safe_data["final_result"] = {}
@@ -812,7 +880,9 @@ def resume_analysis(entry):
     S["analysis_id"] = (
         data.get("analysis_id") or str(uuid.uuid4())
     )
-    S["sport"] = data.get("sport") or entry["sport"] or "Football"
+    S["sport"] = (
+        data.get("sport") or entry["sport"] or "Football"
+    )
     S["data_sport"] = S["sport"]
     S["threshold"] = validity_rate(S["cote_cible"])
     S["is_auto_mode"] = (
@@ -826,7 +896,6 @@ def resume_analysis(entry):
     pool = S.get("matches_pool") or []
     S["has_match_data"] = bool(pool)
 
-    # Répare notamment les anciennes sauvegardes Multi vides.
     if pool and not S.get("relevant_matches"):
         S["relevant_matches"] = copy.deepcopy(pool)
         if step != "final":
@@ -891,7 +960,7 @@ def fetch_football_matches(competition_code, days):
     for code in codes:
         try:
             response = requests.get(
-                f"https://api.football-data.org/v4/"
+                "https://api.football-data.org/v4/"
                 f"competitions/{code}/matches",
                 headers=headers,
                 params=params,
@@ -905,10 +974,14 @@ def fetch_football_matches(competition_code, days):
                     "home": match["homeTeam"]["name"],
                     "away": match["awayTeam"]["name"],
                     "date": match["utcDate"],
-                    "competition": match["competition"]["name"],
+                    "competition": (
+                        match["competition"]["name"]
+                    ),
                 })
         except Exception as error:
-            errors.append(f"{code} : {str(error)[:140]}")
+            errors.append(
+                f"{code} : {str(error)[:140]}"
+            )
 
     return matches, errors
 
@@ -937,6 +1010,7 @@ def fetch_nba_matches(days):
             )
             response.raise_for_status()
             payload = response.json()
+
             for game in payload.get("data", []):
                 status = str(game.get("status", ""))
                 if int(game.get("period") or 0) > 0:
@@ -944,7 +1018,10 @@ def fetch_nba_matches(days):
                 if "final" in status.lower():
                     continue
 
-                date = game.get("datetime") or game.get("date", "")
+                date = (
+                    game.get("datetime")
+                    or game.get("date", "")
+                )
                 parsed = parse_timestamp(date)
                 if (
                     len(str(date)) > 10
@@ -962,7 +1039,9 @@ def fetch_nba_matches(days):
                     "competition": "NBA",
                 })
 
-            cursor = (payload.get("meta") or {}).get("next_cursor")
+            cursor = (
+                (payload.get("meta") or {}).get("next_cursor")
+            )
             if not cursor:
                 break
             params["cursor"] = cursor
@@ -1017,7 +1096,7 @@ def configure_gemini():
 
 def extract_json(text):
     text = re.sub(
-        r"^```(?:json)?\s*|\s*```$",
+        r"^```(?:json)?s*|s*```$",
         "",
         str(text or "").strip(),
         flags=re.IGNORECASE,
@@ -1027,11 +1106,17 @@ def extract_json(text):
     except ValueError:
         start = text.find("{")
         if start < 0:
-            raise ValueError("Aucun objet JSON dans la réponse.")
-        value, _ = json.JSONDecoder().raw_decode(text[start:])
+            raise ValueError(
+                "Aucun objet JSON dans la réponse."
+            )
+        value, _ = json.JSONDecoder().raw_decode(
+            text[start:]
+        )
 
     if not isinstance(value, dict):
-        raise ValueError("La réponse JSON doit être un objet.")
+        raise ValueError(
+            "La réponse JSON doit être un objet."
+        )
     return value
 
 
@@ -1047,22 +1132,19 @@ def generate_json(prompt):
                         response_mime_type="application/json"
                     )
                 )
-            response = model.generate_content(prompt, **kwargs)
+            response = model.generate_content(
+                prompt, **kwargs
+            )
             return extract_json(response.text)
         except Exception as error:
             errors.append(str(error)[:200])
     raise ValueError(" / ".join(errors))
-
-
-# Génération souple : les marchés sont libres, mais les propositions doivent être précises.
-MARKET_FORMAT_VERSION = 5
-MAX_EXTRA_PER_MATCH = 10
-
 SIMPLE_MARKET_RULES = """
 Adapte librement les marchés aux informations de CE match uniquement.
 Chaque proposition comprend : marche, resultat précis, probabilite (nombre décimal
 strictement entre 0 et 1), periode précise, prolongations (incluses/exclues/sans objet,
-ou à vérifier), justification courte fondée sur le texte.
+ou à vérifier), justification courte fondée sur le texte, et niveau_confiance
+parmi "élevé", "moyen" ou "faible".
 Ajoute joueur (nom exact, sinon chaîne vide), statistique et appuis_joueur (citations du
 texte, sinon liste vide) pour un marché de statistique joueur.
 Une victoire de tennis n'est pas un pari de statistique joueur.
@@ -1081,78 +1163,234 @@ une ligne entière pour ce motif. Le règlement sera vérifié à la saisie des 
 Ne gonfle pas les probabilités pour atteindre un seuil de sélection.
 Une estimation manquante est null, jamais 0. Indique alors une raison précise.
 Les probabilités sont des estimations non calibrées ; pas des garanties de réussite.
+Le niveau de confiance n'est pas une probabilité calibrée.
 """
 
 
 def market_key(option):
-    return tuple(" ".join(str(option.get(k, "")).casefold().split())
-                 for k in ("marche", "resultat", "periode", "prolongations"))
+    return tuple(
+        " ".join(
+            str(option.get(k, "")).casefold().split()
+        )
+        for k in (
+            "marche",
+            "resultat",
+            "periode",
+            "prolongations",
+        )
+    )
 
 
 def validate_option(raw, match, information):
     if not isinstance(raw, dict):
-        raise ValueError("La proposition n'a pas été fournie.")
+        raise ValueError(
+            "La proposition n'a pas été fournie."
+        )
+
     p = raw.get("probabilite")
-    if isinstance(p, bool) or not isinstance(p, (int, float)) or not math.isfinite(p) or not 0 < p < 1:
-        raise ValueError(str(raw.get("raison") or "Estimation à préciser à partir des informations du match."))
+    if (
+        isinstance(p, bool)
+        or not isinstance(p, (int, float))
+        or not math.isfinite(p)
+        or not 0 < p < 1
+    ):
+        raise ValueError(
+            str(
+                raw.get("raison")
+                or "Estimation à préciser à partir des "
+                "informations du match."
+            )
+        )
+
     market = str(raw.get("marche") or "").strip()
     outcome = str(raw.get("resultat") or "").strip()
     if not market or not outcome:
-        raise ValueError("Le marché ou le résultat précis manque.")
-    period = str(raw.get("periode") or "match entier").strip()
-    overtime = str(raw.get("prolongations") or "à vérifier chez le bookmaker").strip()
-    text = (market + " " + outcome).casefold().replace("_", " ")
-    number = r"[+-]?\d+(?:[.,]\d+)?"
-    # Le seuil doit suivre le sens du total, pas être un nombre dans un nom d'équipe.
-    total_words = r"\b(over|under|plus de|moins de|au moins|au plus)\b"
-    if re.search(r"\bover\b|\bunder\b|\btotal\b", text) or re.search(total_words, outcome.casefold()):
-        if not re.search(total_words + r"\s*" + number, outcome.casefold()):
-            raise ValueError("Le total doit préciser son sens et sa ligne numérique.")
-        if not re.search(r"points?|buts?|jeux|sets?|rebonds?|passes|tirs|corners?|cartons?|aces?|fautes|yards?|touchdowns?|interceptions?|arrêts?|minutes?|rebounds?|assists?", text):
-            raise ValueError("Précisez l'unité de la statistique.")
-    if re.search(r"handicap|spread", market.casefold()):
-        if not re.search(r"[+-]\s*\d+(?:[.,]\d+)?", outcome):
-            raise ValueError("Le handicap doit comporter une ligne signée.")
-        if re.search(r"\d+\s*(?:à|a|au)\s*\d+", outcome):
-            raise ValueError("Un intervalle de victoire n'est pas un handicap.")
-    if re.search(r"marge|écart", market.casefold()) and not re.search(number, outcome):
-        raise ValueError("La marge doit préciser un écart numérique.")
-    if period.casefold() in {"mi-temps", "mi temps", "quart-temps", "quart temps", "période"}:
-        raise ValueError("Le numéro de la période doit être précisé.")
+        raise ValueError(
+            "Le marché ou le résultat précis manque."
+        )
+
+    period = str(
+        raw.get("periode") or "match entier"
+    ).strip()
+    overtime = str(
+        raw.get("prolongations")
+        or "à vérifier chez le bookmaker"
+    ).strip()
+
+    text = (
+        market + " " + outcome
+    ).casefold().replace("_", " ")
+    number = r"[+-]?d+(?:[.,]d+)?"
+    total_words = (
+        r"\b(over|under|plus de|moins de|au moins|au plus)\b"
+    )
+
+    if (
+        re.search(r"\bover\b|\bunder\b|\btotal\b", text)
+        or re.search(total_words, outcome.casefold())
+    ):
+        if not re.search(
+            total_words + r"s*" + number,
+            outcome.casefold(),
+        ):
+            raise ValueError(
+                "Le total doit préciser son sens et sa ligne "
+                "numérique."
+            )
+        if not re.search(
+            r"points?|buts?|jeux|sets?|rebonds?|passes|tirs|"
+            r"corners?|cartons?|aces?|fautes|yards?|touchdowns?|"
+            r"interceptions?|arrêts?|minutes?|rebounds?|assists?",
+            text,
+        ):
+            raise ValueError(
+                "Précisez l'unité de la statistique."
+            )
+
+    if re.search(
+        r"handicap|spread", market.casefold()
+    ):
+        if not re.search(
+            r"[+-]s*d+(?:[.,]d+)?", outcome
+        ):
+            raise ValueError(
+                "Le handicap doit comporter une ligne signée."
+            )
+        if re.search(
+            r"d+s*(?:à|a|au)s*d+", outcome
+        ):
+            raise ValueError(
+                "Un intervalle de victoire n'est pas un handicap."
+            )
+
+    if (
+        re.search(r"marge|écart", market.casefold())
+        and not re.search(number, outcome)
+    ):
+        raise ValueError(
+            "La marge doit préciser un écart numérique."
+        )
+
+    if period.casefold() in {
+        "mi-temps",
+        "mi temps",
+        "quart-temps",
+        "quart temps",
+        "période",
+    }:
+        raise ValueError(
+            "Le numéro de la période doit être précisé."
+        )
+
     player = str(raw.get("joueur") or "").strip()
-    if re.search(r"joueur|player", market.casefold()) and not player:
-        raise ValueError("Le joueur concerné doit être identifié.")
+    if (
+        re.search(r"joueur|player", market.casefold())
+        and not player
+    ):
+        raise ValueError(
+            "Le joueur concerné doit être identifié."
+        )
+
     if player:
-        source = " ".join(information.casefold().split())
-        if player.casefold() not in source or player.casefold() not in outcome.casefold():
-            raise ValueError("Le joueur doit figurer dans les informations et le résultat.")
-        quotes = raw.get("appuis_joueur") or raw.get("appui_joueur") or []
+        source = " ".join(
+            information.casefold().split()
+        )
+        if (
+            player.casefold() not in source
+            or player.casefold() not in outcome.casefold()
+        ):
+            raise ValueError(
+                "Le joueur doit figurer dans les informations "
+                "et le résultat."
+            )
+
+        quotes = (
+            raw.get("appuis_joueur")
+            or raw.get("appui_joueur")
+            or []
+        )
         if not isinstance(quotes, list) or not quotes:
-            raise ValueError("Le pari joueur doit être appuyé par ses performances dans le texte.")
-        quotes = [" ".join(str(q).casefold().split()) for q in quotes]
-        if any(len(q) < 15 or q not in source for q in quotes):
-            raise ValueError("Les appuis joueur doivent provenir du texte fourni.")
-        statistic = str(raw.get("statistique") or "").casefold().strip()
-        if not statistic or statistic not in " ".join(quotes) or not any(re.search(r"\d", q) for q in quotes):
-            raise ValueError("Le texte doit étayer la statistique joueur avec des performances chiffrées.")
+            raise ValueError(
+                "Le pari joueur doit être appuyé par ses "
+                "performances dans le texte."
+            )
+
+        quotes = [
+            " ".join(str(q).casefold().split())
+            for q in quotes
+        ]
+        if any(
+            len(q) < 15 or q not in source
+            for q in quotes
+        ):
+            raise ValueError(
+                "Les appuis joueur doivent provenir du texte "
+                "fourni."
+            )
+
+        statistic = str(
+            raw.get("statistique") or ""
+        ).casefold().strip()
+        if (
+            not statistic
+            or statistic not in " ".join(quotes)
+            or not any(re.search(r"d", q) for q in quotes)
+        ):
+            raise ValueError(
+                "Le texte doit étayer la statistique joueur avec "
+                "des performances chiffrées."
+            )
+
         if not re.search(number, outcome):
-            raise ValueError("Le pronostic joueur doit préciser un seuil ou une valeur.")
-    return {**raw, "marche":fix_elisions(market), "resultat":fix_elisions(outcome),
-            "probabilite":float(p), "periode":period, "prolongations":overtime,
-            "justification":fix_elisions(raw.get("justification") or "Estimation fondée sur les informations fournies."),
-            "_validation_error":""}
+            raise ValueError(
+                "Le pronostic joueur doit préciser un seuil ou "
+                "une valeur."
+            )
+
+    confidence = str(
+        raw.get("niveau_confiance") or "faible"
+    ).strip().lower()
+
+    if confidence not in ("élevé", "moyen", "faible"):
+        confidence = "faible"
+
+    return {
+        **raw,
+        "marche": fix_elisions(market),
+        "resultat": fix_elisions(outcome),
+        "probabilite": float(p),
+        "niveau_confiance": confidence,
+        "periode": period,
+        "prolongations": overtime,
+        "justification": fix_elisions(
+            raw.get("justification")
+            or "Estimation fondée sur les informations fournies."
+        ),
+        "_validation_error": "",
+    }
 
 
 def collect_candidates(parsed):
     candidates = parsed.get("candidats")
     if isinstance(candidates, list):
         return candidates[:8]
+
     candidates = parsed.get("options")
     if isinstance(candidates, list):
         return candidates[:8]
+
     if isinstance(candidates, dict):
-        return [candidates.get(k) for k in ("A", "B", "C") if k in candidates]
-    return [parsed.get(k) for k in ("A", "B", "C") if k in parsed]
+        return [
+            candidates.get(k)
+            for k in ("A", "B", "C")
+            if k in candidates
+        ]
+
+    return [
+        parsed.get(k)
+        for k in ("A", "B", "C")
+        if k in parsed
+    ]
 
 
 def regenerate_options():
@@ -1160,7 +1398,11 @@ def regenerate_options():
     S["data_cotes_text"] = ""
     S["data_extra_text"] = ""
     S["evaluation_notices"] = []
-    for key in ("widget_cotes_text", "widget_extra_text", "widget_confirm_markets"):
+    for key in (
+        "widget_cotes_text",
+        "widget_extra_text",
+        "widget_confirm_markets",
+    ):
         S.pop(key, None)
     S["last_saved_signature"] = None
 
@@ -1169,48 +1411,145 @@ def generate_match_options(match, sport, user_info_text):
     prompt = f"""
 {ANTI_HALLUCINATION_RULE}
 {SIMPLE_MARKET_RULES}
+
 Match : {json.dumps(match, ensure_ascii=False)}
 Sport : {sport}
 Informations de ce match : {user_info_text}
-Examine jusqu'à 6 propositions distinctes et défendables, pour retenir ensuite les trois
-les mieux estimées. Varie les marchés selon les données, pas selon un trio imposé.
-Cherche une alternative si une proposition n'est pas étayée. Ne remplis pas artificiellement
-six ou trois cases. Ne transforme pas un manque de données en probabilité de zéro.
-Réponds uniquement en JSON :
-{{"synthese":"2 à 3 phrases", "candidats":[
-{{"marche":"intitulé", "resultat":"résultat précis", "probabilite":null,
-"periode":"match entier", "prolongations":"à vérifier", "justification":"...",
-"joueur":"", "statistique":"", "appuis_joueur":[]}}],
-"complement_demande":"si nécessaire, complément précis pour un autre scénario"}}
-Le null ci-dessus illustre une estimation absente. Mets un nombre décimal entre 0 et 1
-pour les propositions évaluables. Ne recopie pas null pour celles-ci.
+
+Examine jusqu'à 6 propositions distinctes et défendables, puis retiens
+uniquement les 1 à 3 scénarios les mieux étayés. Varie les marchés selon
+les données disponibles, pas selon un trio imposé.
+
+Règles obligatoires :
+- Ne propose un scénario que s'il est fondé sur les informations fournies.
+- Ne transforme pas un manque de données en probabilité de zéro : exclue
+simplement le scénario s'il n'est pas évaluable.
+- Ne force pas trois propositions si une ou deux seulement sont défendables.
+- Pour chaque scénario retenu, attribue un niveau de confiance :
+"élevé", "moyen" ou "faible".
+- Confiance élevée : plusieurs données concordantes et peu d'incertitudes.
+- Confiance moyenne : éléments favorables présents, mais incertitudes
+importantes.
+- Confiance faible : données insuffisantes, contradictions ou dépendance
+à des éléments non confirmés.
+- Le niveau de confiance n'est pas une probabilité calibrée et ne doit
+jamais être présenté comme un pourcentage de réussite.
+- Si un scénario concerne un joueur, vérifie qu'il est bien disponible
+dans les informations fournies. N'utilise jamais un joueur listé comme
+absent.
+- Si un marché est ambigu, imprécis ou non vérifiable, ne le propose pas.
+
+Réponds uniquement en JSON valide :
+{{
+  "synthese": "2 à 3 phrases en français",
+  "candidats": [
+    {{
+      "marche": "intitulé du marché",
+      "resultat": "résultat exact visé",
+      "probabilite": 0.0,
+      "niveau_confiance": "élevé, moyen ou faible",
+      "periode": "match entier",
+      "prolongations": "à vérifier",
+      "justification": "explication fondée uniquement sur les
+informations fournies",
+      "joueur": "",
+      "statistique": "",
+      "appuis_joueur": []
+    }}
+  ],
+  "complement_demande": "complément précis si nécessaire, sinon chaîne
+vide"
+}}
+
+La probabilité doit être un nombre décimal entre 0 et 1 pour les
+propositions évaluables. N'utilise jamais null pour une proposition
+retenue.
 """
     pool, diagnostics, synthesis, complement = {}, [], "", ""
     feedback = ""
+
     for attempt in range(2):
         try:
             parsed = generate_json(prompt + feedback)
-            synthesis = synthesis or fix_elisions(parsed.get("synthese", ""))
-            complement = str(parsed.get("complement_demande") or complement)
+            synthesis = synthesis or fix_elisions(
+                parsed.get("synthese", "")
+            )
+            complement = str(
+                parsed.get("complement_demande")
+                or complement
+            )
+
             for raw in collect_candidates(parsed):
                 try:
-                    option = validate_option(raw, match, user_info_text)
-                    # Dédupliquer le même événement, même si l'intitulé diffère.
+                    option = validate_option(
+                        raw,
+                        match,
+                        user_info_text,
+                    )
                     key = market_key(option)[1:]
-                    if key not in pool or option["probabilite"] > pool[key]["probabilite"]:
+                    if (
+                        key not in pool
+                        or option["probabilite"]
+                        > pool[key]["probabilite"]
+                    ):
                         pool[key] = option
                 except ValueError as error:
                     diagnostics.append(str(error))
+
             if len(pool) >= 3:
                 break
-            feedback = "\nIl reste des propositions à préciser. Fournis des alternatives distinctes fondées sur le texte, sans inventer de faits. Déjà retenues : " + json.dumps(list(pool.values()), ensure_ascii=False) + "; points à corriger : " + json.dumps(diagnostics[-6:], ensure_ascii=False)
+
+            feedback = (
+                "
+Il reste des propositions à préciser. Fournis "
+                "uniquement des alternatives distinctes, fondées sur "
+                "le texte, sans inventer de faits. Déjà retenues : "
+                + json.dumps(
+                    list(pool.values()),
+                    ensure_ascii=False,
+                )
+                + "; points à corriger : "
+                + json.dumps(
+                    diagnostics[-6:],
+                    ensure_ascii=False,
+                )
+            )
+
         except Exception as error:
-            diagnostics.append("Appel ou lecture de la réponse : " + str(error)[:250])
-    selected = sorted(pool.values(), key=lambda option:option["probabilite"], reverse=True)[:3]
-    result = {"synthese":synthesis, "_error":"", "_market_version":MARKET_FORMAT_VERSION,
-              "_diagnostics":list(dict.fromkeys(diagnostics)), "_complement":complement}
+            diagnostics.append(
+                "Appel ou lecture de la réponse : "
+                + str(error)[:250]
+            )
+
+    confidence_rank = {
+        "élevé": 2,
+        "moyen": 1,
+        "faible": 0,
+    }
+
+    selected = sorted(
+        pool.values(),
+        key=lambda option: (
+            option["probabilite"],
+            confidence_rank.get(
+                option.get("niveau_confiance", "faible"),
+                0,
+            ),
+        ),
+        reverse=True,
+    )[:3]
+
+    result = {
+        "synthese": synthesis,
+        "_error": "",
+        "_market_version": MARKET_FORMAT_VERSION,
+        "_diagnostics": list(dict.fromkeys(diagnostics)),
+        "_complement": complement,
+    }
+
     for letter, option in zip(("A", "B", "C"), selected):
         result[letter] = option
+
     return result
 
 
@@ -1218,52 +1557,92 @@ def evaluate_extra_market(match, name, user_info_text):
     prompt = f"""
 {ANTI_HALLUCINATION_RULE}
 {SIMPLE_MARKET_RULES}
+
 Match : {json.dumps(match, ensure_ascii=False)}
 Informations : {user_info_text}
 Marché EXTRA exact demandé : {name}
-Réponds avec une seule proposition JSON (pas une liste).
-Évalue CE marché uniquement. Ne modifie ni la ligne, ni l'équipe, ni la période.
-Ne complète pas une ligne ou un joueur manquant. Si nécessaire renvoie
-{{"probabilite":null,"raison":"précision exacte nécessaire"}}.
+
+Réponds avec une seule proposition JSON, pas une liste.
+Évalue CE marché uniquement. Ne modifie ni la ligne, ni l'équipe, ni la
+période. Ne complète pas une ligne ou un joueur manquant.
+Si nécessaire, renvoie :
+{{"probabilite":null,"raison":"précision exacte nécessaire"}}
+
 La règle d'égalité n'est pas un champ obligatoire de cette évaluation.
-Le marché joueur doit être appuyé par les performances du joueur dans les informations.
+Le marché joueur doit être appuyé par les performances du joueur dans les
+informations.
 """
     raw = generate_json(prompt)
     try:
-        option = validate_option(raw, match, user_info_text)
+        option = validate_option(
+            raw, match, user_info_text
+        )
         source = name.replace("_", " ").casefold()
-        if option.get("joueur") and option["joueur"].casefold() not in source:
-            raise ValueError("Joueur différent de celui de l'EXTRA.")
-        # Les chiffres d'un seuil ne peuvent être ajoutés à un EXTRA qui les omet.
-        extract = lambda text: [float(x.replace(",", ".")) for x in re.findall(r"[+-]?\d+(?:[.,]\d+)?", text)]
-        if any(n not in extract(source) for n in extract(option["resultat"])):
-            raise ValueError("Le résultat évalué ajoute ou modifie une valeur numérique de l'EXTRA.")
+
+        if (
+            option.get("joueur")
+            and option["joueur"].casefold()
+            not in source
+        ):
+            raise ValueError(
+                "Joueur différent de celui de l'EXTRA."
+            )
+
+        extract = lambda text: [
+            float(x.replace(",", "."))
+            for x in re.findall(
+                r"[+-]?d+(?:[.,]d+)?", text
+            )
+        ]
+
+        if any(
+            n not in extract(source)
+            for n in extract(option["resultat"])
+        ):
+            raise ValueError(
+                "Le résultat évalué ajoute ou modifie une valeur "
+                "numérique de l'EXTRA."
+            )
+
         return option
     except ValueError as error:
-        return {"probabilite":None, "_validation_error":str(error), "raison":str(error)}
+        return {
+            "probabilite": None,
+            "_validation_error": str(error),
+            "raison": str(error),
+        }
 
 
 def generate_final_justification(result):
     fallback = (
         "Les sélections retenues respectent le seuil individuel "
         "d'estimation demandé. Le coupon recherche un compromis entre "
-        "la proximité de la cote cible et la probabilité combinée estimée. "
-        "Ces estimations ne constituent pas une garantie de réussite."
+        "la proximité de la cote cible et la probabilité combinée "
+        "estimée. Ces estimations ne constituent pas une garantie de "
+        "réussite."
     )
+
     description = [
         {
-            "match": f"{item.get('home')} contre {item.get('away')}",
+            "match": (
+                f"{item.get('home')} contre "
+                f"{item.get('away')}"
+            ),
             "marche": item.get("chosen_marche"),
             "resultat": item.get("chosen_resultat"),
             "periode": item.get("chosen_periode"),
-            "prolongations": item.get("chosen_prolongations"),
+            "prolongations": item.get(
+                "chosen_prolongations"
+            ),
             "cote": item.get("chosen_cote"),
             "probabilite": item.get("chosen_prob"),
         }
         for item in result["combo"]
     ]
+
     prompt = f"""
 {ANTI_HALLUCINATION_RULE}
+
 Sélections :
 {json.dumps(description, ensure_ascii=False)}
 
@@ -1280,7 +1659,9 @@ Ne qualifie pas le coupon de sûr ou garanti.
 Rappelle la limite de l'hypothèse d'indépendance.
 """
     try:
-        response = configure_gemini().generate_content(prompt)
+        response = configure_gemini().generate_content(
+            prompt
+        )
         text = clean_justification_text(response.text)
         return text or fallback
     except Exception:
@@ -1291,12 +1672,13 @@ Rappelle la limite de l'hypothèse d'indépendance.
 # RECHERCHE DU COUPON
 # ============================================================
 
-def search_coupon(candidate_groups, target, max_size, tolerance):
+def search_coupon(
+    candidate_groups, target, max_size, tolerance
+):
     target_log = math.log(target)
     lower = target * (1.0 - tolerance)
     upper = target * (1.0 + tolerance)
 
-    # État : log(cote), log(probabilité), sélections.
     states = [(0.0, 0.0, tuple())]
 
     for group in candidate_groups:
@@ -1306,22 +1688,30 @@ def search_coupon(candidate_groups, target, max_size, tolerance):
                 continue
             for candidate in group:
                 expanded.append((
-                    log_odds + math.log(candidate["chosen_cote"]),
-                    log_prob + math.log(candidate["chosen_prob"]),
+                    log_odds
+                    + math.log(candidate["chosen_cote"]),
+                    log_prob
+                    + math.log(
+                        candidate["chosen_prob"]
+                    ),
                     combo + (candidate,),
                 ))
 
         if len(expanded) > SEARCH_BEAM_WIDTH:
-            # Diversité de cotes ET de tailles, avec plusieurs
-            # candidats par compartiment.
             buckets = {}
             for state in expanded:
-                key = (len(state[2]), round(state[0] * 180))
+                key = (
+                    len(state[2]),
+                    round(state[0] * 180),
+                )
                 buckets.setdefault(key, []).append(state)
 
             reduced = []
             for items in buckets.values():
-                items.sort(key=lambda item: item[1], reverse=True)
+                items.sort(
+                    key=lambda item: item[1],
+                    reverse=True,
+                )
                 reduced.extend(items[:3])
 
             def partial_rank(state):
@@ -1329,15 +1719,25 @@ def search_coupon(candidate_groups, target, max_size, tolerance):
                 if not combo:
                     return (0, 0.0, 0.0)
                 if log_odds <= math.log(upper):
-                    return (0, -log_prob, abs(log_odds - target_log))
-                return (1, log_odds - target_log, -log_prob)
+                    return (
+                        0,
+                        -log_prob,
+                        abs(log_odds - target_log),
+                    )
+                return (
+                    1,
+                    log_odds - target_log,
+                    -log_prob,
+                )
 
             reduced.sort(key=partial_rank)
             states = reduced[:SEARCH_BEAM_WIDTH]
         else:
             states = expanded
 
-    nonempty = [state for state in states if state[2]]
+    nonempty = [
+        state for state in states if state[2]
+    ]
     if not nonempty:
         return None
 
@@ -1371,53 +1771,140 @@ def search_coupon(candidate_groups, target, max_size, tolerance):
         "diff": abs(total - target),
         "within_tolerance": lower <= total <= upper,
         "tolerance": tolerance,
-        "search_method": "Recherche bornée par faisceau",
+        "search_method": (
+            "Recherche bornée par faisceau"
+        ),
     }
 
 
 def build_final_result(cotes, extras):
     threshold = validity_rate(S["cote_cible"])
-    information = extract_info_by_mid(S["data_info_text"])
+    information = extract_info_by_mid(
+        S["data_info_text"]
+    )
     groups, all_evaluated, notices = [], [], []
+
     for match in S["relevant_matches"]:
         mid = match["mid"]
         candidates = []
+
         def candidate(option, odds, letter):
-            return {**match, "letter":letter, "chosen_marche":option["marche"],
-                    "chosen_resultat":option["resultat"], "chosen_periode":option["periode"],
-                    "chosen_prolongations":option["prolongations"],
-                    "chosen_prob":option["probabilite"], "chosen_cote":odds}
+            return {
+                **match,
+                "letter": letter,
+                "chosen_marche": option["marche"],
+                "chosen_resultat": option["resultat"],
+                "chosen_periode": option["periode"],
+                "chosen_prolongations": option[
+                    "prolongations"
+                ],
+                "chosen_prob": option["probabilite"],
+                "chosen_confiance": option.get(
+                    "niveau_confiance", "faible"
+                ),
+                "chosen_cote": odds,
+            }
+
         for letter, odds in cotes.get(mid, {}).items():
             try:
-                option = validate_option(S["options_results"].get(mid, {}).get(letter), match, information.get(mid, ""))
-                candidates.append(candidate(option, odds, letter))
+                option = validate_option(
+                    S["options_results"]
+                    .get(mid, {})
+                    .get(letter),
+                    match,
+                    information.get(mid, ""),
+                )
+                candidates.append(
+                    candidate(option, odds, letter)
+                )
             except ValueError:
                 continue
-        for index, extra in enumerate(extras.get(mid, []), 1):
-            cache_key = fingerprint({"version":MARKET_FORMAT_VERSION, "match":match, "market":extra["marche"], "info":information.get(mid, "")})
+
+        for index, extra in enumerate(
+            extras.get(mid, []), 1
+        ):
+            cache_key = fingerprint({
+                "version": MARKET_FORMAT_VERSION,
+                "match": match,
+                "market": extra["marche"],
+                "info": information.get(mid, ""),
+            })
+
             if cache_key not in S["extra_results"]:
                 try:
-                    S["extra_results"][cache_key] = evaluate_extra_market(match, extra["marche"], information.get(mid, ""))
+                    S["extra_results"][cache_key] = (
+                        evaluate_extra_market(
+                            match,
+                            extra["marche"],
+                            information.get(mid, ""),
+                        )
+                    )
                 except Exception as error:
-                    notices.append(f"{mid} EXTRA {index} : évaluation interrompue ({str(error)[:180]}). Réessayez.")
+                    notices.append(
+                        f"{mid} EXTRA {index} : évaluation "
+                        "interrompue ("
+                        + str(error)[:180]
+                        + "). Réessayez."
+                    )
                     continue
+
             option = S["extra_results"][cache_key]
-            if not isinstance(option,dict) or option.get("_validation_error"):
-                reason = option.get("raison", "Précision requise") if isinstance(option,dict) else "Réévaluation nécessaire"
-                notices.append(f"{mid} EXTRA {index} : {reason}")
+            if (
+                not isinstance(option, dict)
+                or option.get("_validation_error")
+            ):
+                reason = (
+                    option.get("raison", "Précision requise")
+                    if isinstance(option, dict)
+                    else "Réévaluation nécessaire"
+                )
+                notices.append(
+                    f"{mid} EXTRA {index} : {reason}"
+                )
                 continue
-            candidates.append(candidate(option, extra["cote"], f"EXTRA {index}"))
-        admissible = [c for c in candidates if c["chosen_prob"] >= threshold and valid_odds(c["chosen_cote"])]
+
+            candidates.append(
+                candidate(
+                    option,
+                    extra["cote"],
+                    f"EXTRA {index}",
+                )
+            )
+
+        admissible = [
+            c for c in candidates
+            if c["chosen_prob"] >= threshold
+            and valid_odds(c["chosen_cote"])
+        ]
+
         if admissible:
             groups.append(admissible)
-        all_evaluated.append({**match, "status":"admissible" if admissible else "aucune option au seuil requis", "candidates":candidates})
+
+        all_evaluated.append({
+            **match,
+            "status": (
+                "admissible"
+                if admissible
+                else "aucune option au seuil requis"
+            ),
+            "candidates": candidates,
+        })
+
     S["evaluation_notices"] = notices
-    result = search_coupon(groups, S["cote_cible"], S["coupon_max_size"], S["tolerance"])
+    result = search_coupon(
+        groups,
+        S["cote_cible"],
+        S["coupon_max_size"],
+        S["tolerance"],
+    )
+
     if result:
-        result.update(all_evaluated=all_evaluated, threshold=threshold, evaluation_notices=notices)
+        result.update(
+            all_evaluated=all_evaluated,
+            threshold=threshold,
+            evaluation_notices=notices,
+        )
     return result
-
-
 # ============================================================
 # COOKIES ET AUTHENTIFICATION
 # ============================================================
@@ -1477,7 +1964,9 @@ if not S["logged_in"]:
         )
         if st.button(
             "🔐 Se connecter",
-            disabled=not (email.strip() and password),
+            disabled=not (
+                email.strip() and password
+            ),
         ):
             try:
                 if authenticate_user(email, password):
@@ -1487,15 +1976,24 @@ if not S["logged_in"]:
                     cookies["session_token"] = token
                     cookies.save()
                     S["logged_in"] = True
-                    S["user_email"] = email.strip().lower()
+                    S["user_email"] = (
+                        email.strip().lower()
+                    )
                     st.rerun()
                 else:
-                    st.error("E-mail ou mot de passe incorrect.")
+                    st.error(
+                        "E-mail ou mot de passe incorrect."
+                    )
             except Exception as error:
-                st.error("Connexion impossible : " + str(error)[:250])
+                st.error(
+                    "Connexion impossible : "
+                    + str(error)[:250]
+                )
 
         with st.expander("Mot de passe oublié ?"):
-            st.info("Cette fonctionnalité n'est pas encore disponible.")
+            st.info(
+                "Cette fonctionnalité n'est pas encore disponible."
+            )
 
     with tab_signup:
         email = st.text_input(
@@ -1509,18 +2007,31 @@ if not S["logged_in"]:
         )
         if st.button(
             "🆕 Créer mon compte",
-            disabled=not (email.strip() and password),
+            disabled=not (
+                email.strip() and password
+            ),
         ):
             try:
-                if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
-                    st.error("Saisissez une adresse e-mail valide.")
+                if not re.fullmatch(
+                    r"[^@s]+@[^@s]+.[^@s]+", email
+                ):
+                    st.error(
+                        "Saisissez une adresse e-mail valide."
+                    )
                 elif find_user_row(email)[0]:
-                    st.error("Un compte existe déjà avec cet e-mail.")
+                    st.error(
+                        "Un compte existe déjà avec cet e-mail."
+                    )
                 else:
                     create_user(email, password)
-                    st.success("Compte créé. Vous pouvez vous connecter.")
+                    st.success(
+                        "Compte créé. Vous pouvez vous connecter."
+                    )
             except Exception as error:
-                st.error("Inscription impossible : " + str(error)[:250])
+                st.error(
+                    "Inscription impossible : "
+                    + str(error)[:250]
+                )
 
     st.stop()
 
@@ -1628,7 +2139,10 @@ if S["page"] == "history":
 
     if st.button("🗑️ Tout supprimer"):
         S["confirm_delete"] = {
-            "rows": [entry["row_number"] for entry in entries],
+            "rows": [
+                entry["row_number"]
+                for entry in entries
+            ],
             "label": "tout votre historique",
         }
 
@@ -1643,7 +2157,9 @@ if S["page"] == "history":
         with yes:
             if st.button("✅ Confirmer la suppression"):
                 try:
-                    delete_history_rows(confirmation["rows"])
+                    delete_history_rows(
+                        confirmation["rows"]
+                    )
                     S["confirm_delete"] = None
                     S["last_saved_signature"] = None
                     st.rerun()
@@ -1656,7 +2172,9 @@ if S["page"] == "history":
 
     periods = {}
     for group in grouped:
-        label = period_label(group["latest"]["timestamp"])
+        label = period_label(
+            group["latest"]["timestamp"]
+        )
         periods.setdefault(label, []).append(group)
 
     order = [
@@ -1683,7 +2201,9 @@ if S["page"] == "history":
                     for group in periods[period]
                     for row in group["row_numbers"]
                 ],
-                "label": f"la période « {period} »",
+                "label": (
+                    f"la période « {period} »"
+                ),
             }
             st.rerun()
 
@@ -1708,20 +2228,25 @@ if S["page"] == "history":
             with resume_col:
                 if st.button(
                     "▶️ Reprendre",
-                    key=f"resume_{group['analysis_id']}",
+                    key=(
+                        f"resume_{group['analysis_id']}"
+                    ),
                 ):
                     try:
                         resume_analysis(entry)
                         st.rerun()
                     except Exception as error:
                         st.error(
-                            "Reprise impossible : " + str(error)[:300]
+                            "Reprise impossible : "
+                            + str(error)[:300]
                         )
 
             with delete_col:
                 if st.button(
                     "🗑️ Supprimer",
-                    key=f"delete_{group['analysis_id']}",
+                    key=(
+                        f"delete_{group['analysis_id']}"
+                    ),
                 ):
                     S["confirm_delete"] = {
                         "rows": group["row_numbers"],
@@ -1754,7 +2279,9 @@ if S["step"] == "setup":
     )
 
     initial_sport = (
-        S["sport"] if S["sport"] in SPORT_LIST else "Football"
+        S["sport"]
+        if S["sport"] in SPORT_LIST
+        else "Football"
     )
     sport_key = widget_value("sport", initial_sport)
     sport = st.selectbox(
@@ -1771,12 +2298,15 @@ if S["step"] == "setup":
         initial = next(
             (
                 label
-                for label, code in FOOTBALL_COMPETITIONS.items()
+                for label, code
+                in FOOTBALL_COMPETITIONS.items()
                 if code == S["competition"]
             ),
             labels[0],
         )
-        key = widget_value("competition_foot", initial)
+        key = widget_value(
+            "competition_foot", initial
+        )
         label = st.selectbox(
             "⚽ Compétition",
             labels,
@@ -1791,14 +2321,21 @@ if S["step"] == "setup":
             if S["competition"] == "Euroligue"
             else "NBA (automatique)"
         )
-        key = widget_value("basket_mode", initial)
+        key = widget_value(
+            "basket_mode", initial
+        )
         choice = st.radio(
             "🏀 Mode",
-            ["NBA (automatique)", "Euroligue (manuel)"],
+            [
+                "NBA (automatique)",
+                "Euroligue (manuel)",
+            ],
             key=key,
         )
         automatic = choice == "NBA (automatique)"
-        competition = "NBA" if automatic else "Euroligue"
+        competition = (
+            "NBA" if automatic else "Euroligue"
+        )
 
     target_key = widget_value(
         "cote_cible",
@@ -1835,15 +2372,20 @@ if S["step"] == "setup":
 
     st.info(
         f"Seuil individuel : {S['threshold']:.0%}. "
-        f"Cote moyenne de préparation : {AVERAGE_ODDS:.2f}. "
-        f"Environ {estimated_selections(target)} sélection(s) "
-        "nécessaire(s) à cette cote moyenne."
+        f"Cote moyenne de préparation : "
+        f"{AVERAGE_ODDS:.2f}. "
+        f"Environ {estimated_selections(target)} "
+        "sélection(s) nécessaire(s) à cette cote moyenne."
     )
 
     if automatic:
-        mode, max_size, days, limit, threshold = (
-            determine_mode_params(target)
-        )
+        (
+            mode,
+            max_size,
+            days,
+            limit,
+            threshold,
+        ) = determine_mode_params(target)
         S["mode"] = mode
         S["coupon_max_size"] = max_size
         S["jours_fenetre"] = days
@@ -1855,26 +2397,36 @@ if S["step"] == "setup":
             "multi": "Multi",
         }
         st.info(
-            f"Mode {labels[mode]} : recherche sur {days} jours, "
-            f"jusqu'à {limit} rencontres à étudier. "
-            "Des informations seront demandées pour chacune."
+            f"Mode {labels[mode]} : recherche sur "
+            f"{days} jours, jusqu'à {limit} rencontres "
+            "à étudier. Des informations seront demandées "
+            "pour chacune."
         )
         st.caption(
-            "Les rencontres sont classées par date, pas sélectionnées "
-            "à ce stade pour leur probabilité de réussite."
+            "Les rencontres sont classées par date, pas "
+            "sélectionnées à ce stade pour leur probabilité "
+            "de réussite."
         )
 
         if st.button("🔍 Lancer le scan des matchs"):
-            with st.spinner("Récupération des rencontres..."):
+            with st.spinner(
+                "Récupération des rencontres..."
+            ):
                 try:
                     if sport == "Football":
-                        matches, errors = fetch_football_matches(
-                            competition,
-                            days,
+                        matches, errors = (
+                            fetch_football_matches(
+                                competition,
+                                days,
+                            )
                         )
                     else:
-                        matches, errors = fetch_nba_matches(days)
-                    pool = prepare_pool(matches, limit)
+                        matches, errors = (
+                            fetch_nba_matches(days)
+                        )
+                    pool = prepare_pool(
+                        matches, limit
+                    )
                 except Exception as error:
                     pool = []
                     errors = [str(error)[:250]]
@@ -1885,12 +2437,15 @@ if S["step"] == "setup":
             if not pool:
                 st.error(
                     "Aucune rencontre exploitable trouvée. "
-                    "Vérifiez la compétition, la période et les API."
+                    "Vérifiez la compétition, la période et "
+                    "les API."
                 )
             else:
                 reset_results()
                 S["matches_pool"] = pool
-                S["relevant_matches"] = copy.deepcopy(pool)
+                S["relevant_matches"] = copy.deepcopy(
+                    pool
+                )
                 S["has_match_data"] = True
                 S["data_info_text"] = ""
                 S["data_cotes_text"] = ""
@@ -1923,7 +2478,9 @@ if S["step"] == "setup":
             target,
             MAX_MANUAL_GLOBAL,
         )
-        count_key = widget_value("nb_matches", recommended)
+        count_key = widget_value(
+            "nb_matches", recommended
+        )
         count = st.slider(
             "📋 Nombre de rencontres",
             min_value=1,
@@ -1931,7 +2488,8 @@ if S["step"] == "setup":
             key=count_key,
         )
         st.caption(
-            f"Recommandation indicative : {recommended} rencontres."
+            f"Recommandation indicative : "
+            f"{recommended} rencontres."
         )
         S["manual_nb_matches"] = count
 
@@ -1951,7 +2509,11 @@ if S["step"] == "setup":
                     "widget_match_sport_",
                 )):
                     del S[key]
-            for name in ("info_text", "cotes_text", "extra_text"):
+            for name in (
+                "info_text",
+                "cotes_text",
+                "extra_text",
+            ):
                 S.pop(f"widget_{name}", None)
 
             S["step"] = "manual_entry"
@@ -1975,15 +2537,23 @@ elif S["step"] == "manual_entry":
 
     for index in range(S["manual_nb_matches"]):
         mid = f"M{index + 1}"
-        previous = draft[index] if index < len(draft) else {}
+        previous = (
+            draft[index]
+            if index < len(draft)
+            else {}
+        )
         st.markdown(f"### {mid}")
 
         if S["sport"] == "Tout":
             options = SPORT_LIST[:-1]
-            initial = previous.get("sport", "Football")
+            initial = previous.get(
+                "sport", "Football"
+            )
             if initial not in options:
                 initial = "Football"
-            key = widget_value(f"match_sport_{index}", initial)
+            key = widget_value(
+                f"match_sport_{index}", initial
+            )
             match_sport = st.selectbox(
                 f"Sport de {mid}",
                 options,
@@ -2038,7 +2608,9 @@ elif S["step"] == "manual_entry":
         for match in matches
     )
     if not complete:
-        st.warning("Renseignez les deux participants de chaque match.")
+        st.warning(
+            "Renseignez les deux participants de chaque match."
+        )
 
     if st.button(
         "➡️ Informations complémentaires",
@@ -2059,10 +2631,12 @@ elif S["step"] == "manual_entry":
 # ============================================================
 
 elif S["step"] == "info_request":
-    st.markdown("## 🔍 Informations complémentaires")
+    st.markdown(
+        "## 🔍 Informations complémentaires"
+    )
     st.write(
-        "Fournissez un texte non vide pour chaque rencontre. "
-        "Indiquez les sources et les dates lorsque vous en disposez. "
+        "Collez ici le rapport préparé pour chaque rencontre. "
+        "Utilisez une section commençant par M1:, M2:, etc. "
         "Les informations ne sont pas vérifiées automatiquement."
     )
 
@@ -2072,24 +2646,32 @@ elif S["step"] == "info_request":
 
     matches = S["relevant_matches"]
     if not matches:
-        st.error("Aucun match à analyser. Relancez le paramétrage.")
+        st.error(
+            "Aucun match à analyser. Relancez le paramétrage."
+        )
         st.stop()
 
     for match in matches:
         st.write(
             f"{match['mid']} — {match['home']} contre "
-            f"{match['away']} | {match.get('competition', '')} "
-            f"| {match.get('date', '')}"
+            f"{match['away']} | "
+            f"{match.get('competition', '')} | "
+            f"{match.get('date', '')}"
         )
 
     if not S["data_info_text"]:
-        S["data_info_text"] = (chr(10) * 2).join(
-            f"{match['mid']}: " for match in matches
+        S["data_info_text"] = (
+            chr(10) * 2
+        ).join(
+            f"{match['mid']}: "
+            for match in matches
         )
 
-    key = widget_value("info_text", S["data_info_text"])
+    key = widget_value(
+        "info_text", S["data_info_text"]
+    )
     st.text_area(
-        "📝 Une section par match, commençant par M1:, M2:, etc.",
+        "📝 Rapports des matchs",
         height=320,
         key=key,
         on_change=capture_text,
@@ -2097,10 +2679,13 @@ elif S["step"] == "info_request":
     )
     S["data_info_text"] = S[key]
 
-    missing = missing_information(S["data_info_text"], matches)
+    missing = missing_information(
+        S["data_info_text"], matches
+    )
     if missing:
         st.warning(
-            "Informations manquantes ou vides : " + ", ".join(missing)
+            "Informations manquantes ou vides : "
+            + ", ".join(missing)
         )
 
     if st.button(
@@ -2123,17 +2708,29 @@ elif S["step"] == "options_ready":
     matches = S["relevant_matches"]
 
     if not matches:
-        st.error("Aucun match à analyser. Relancez le paramétrage.")
+        st.error(
+            "Aucun match à analyser. Relancez le paramétrage."
+        )
         st.stop()
 
     if st.button("⬅️ Modifier les informations"):
         S["step"] = "info_request"
         st.rerun()
 
-    st.caption("Une régénération remplace les options et efface les anciennes cotes, les EXTRA et le résultat.")
-    st.button("🔄 Régénérer toutes les options et effacer les anciennes cotes", on_click=regenerate_options)
+    st.caption(
+        "Une régénération remplace les options et efface les "
+        "anciennes cotes, les EXTRA et le résultat."
+    )
+    st.button(
+        "🔄 Régénérer toutes les options et effacer "
+        "les anciennes cotes",
+        on_click=regenerate_options,
+    )
+
     info = extract_info_by_mid(S["data_info_text"])
-    missing = missing_information(S["data_info_text"], matches)
+    missing = missing_information(
+        S["data_info_text"], matches
+    )
     if missing:
         st.warning(
             "Complétez d'abord les informations : "
@@ -2145,26 +2742,36 @@ elif S["step"] == "options_ready":
         match for match in matches
         if match["mid"] not in S["options_results"]
     ]
+
     if pending:
-        with st.spinner("Génération des options par Gemini..."):
+        with st.spinner(
+            "Génération des options par Gemini..."
+        ):
             progress = st.progress(0.0)
-            for index, match in enumerate(pending, 1):
-                S["options_results"][match["mid"]] = (
-                    generate_match_options(
-                        match,
-                        match.get("sport", S["sport"]),
-                        info.get(match["mid"], ""),
-                    )
+            for index, match in enumerate(
+                pending, 1
+            ):
+                S["options_results"][
+                    match["mid"]
+                ] = generate_match_options(
+                    match,
+                    match.get(
+                        "sport", S["sport"]
+                    ),
+                    info.get(match["mid"], ""),
                 )
                 record_progress()
-                progress.progress(index / len(pending))
+                progress.progress(
+                    index / len(pending)
+                )
 
     failed = []
     for match in matches:
         mid = match["mid"]
         options = S["options_results"].get(mid, {})
         st.markdown(
-            f"### {mid} — {match['home']} 🆚 {match['away']}"
+            f"### {mid} — {match['home']} 🆚 "
+            f"{match['away']}"
         )
 
         badge = (
@@ -2176,56 +2783,114 @@ elif S["step"] == "options_ready":
         )
         st.markdown(badge, unsafe_allow_html=True)
 
-        with st.expander(f"📝 Informations de {mid}"):
+        with st.expander(
+            f"📝 Informations de {mid}"
+        ):
             st.text(info.get(mid, ""))
 
         if options.get("_error"):
             failed.append(mid)
             st.error(
-                "Options indisponibles : " + options["_error"]
+                "Options indisponibles : "
+                + options["_error"]
             )
             continue
 
         st.write(
             "🔎 Analyse de l'Aigle : "
-            + fix_elisions(options.get("synthese", ""))
+            + fix_elisions(
+                options.get("synthese", "")
+            )
         )
 
         displayed = 0
-        display_diagnostics = list(options.get("_diagnostics") or [])
+        display_diagnostics = list(
+            options.get("_diagnostics") or []
+        )
+
         for letter in ("A", "B", "C"):
             raw = options.get(letter)
             if raw is None:
                 continue
             try:
-                option = validate_option(raw, match, info.get(mid, ""))
+                option = validate_option(
+                    raw,
+                    match,
+                    info.get(mid, ""),
+                )
             except ValueError as error:
-                display_diagnostics.append(f"{letter} : {error}")
+                display_diagnostics.append(
+                    f"{letter} : {error}"
+                )
                 continue
+
             displayed += 1
+            confidence = option.get(
+                "niveau_confiance", "faible"
+            )
+            confidence_emoji = {
+                "élevé": "🟢",
+                "moyen": "🟡",
+                "faible": "🔴",
+            }.get(confidence, "🔴")
+
             st.markdown(
                 "<div class='option-card'>"
-                f"🎯 <b>Option {letter}</b> — {esc(option['marche'])}<br>"
-                f"Résultat : {esc(option['resultat'])}<br>"
-                f"Période : {esc(option['periode'])} — prolongations : {esc(option['prolongations'])}<br>"
-                f"📊 Probabilité estimée : {option['probabilite']:.1%}<br>"
-                f"Appui de l'analyse : {esc(option['justification'])}<br>"
+                f"🎯 <b>Option {letter}</b> — "
+                f"{esc(option['marche'])}<br>"
+                f"Résultat : "
+                f"{esc(option['resultat'])}<br>"
+                f"Période : "
+                f"{esc(option['periode'])} — prolongations : "
+                f"{esc(option['prolongations'])}<br>"
+                f"📊 Probabilité estimée : "
+                f"{option['probabilite']:.1%}<br>"
+                f"{confidence_emoji} Niveau de confiance : "
+                f"{esc(confidence)}<br>"
+                f"Appui de l'analyse : "
+                f"{esc(option['justification'])}<br>"
                 "Proposition non vérifiée chez le bookmaker."
-                "</div>", unsafe_allow_html=True,
+                "</div>",
+                unsafe_allow_html=True,
             )
+
         if displayed < 3:
-            st.info(f"{displayed} proposition(s) retenue(s) pour ce match. Vous pouvez utiliser celles disponibles, ajouter un EXTRA précis ou compléter les informations avant une régénération.")
+            st.info(
+                f"{displayed} proposition(s) retenue(s) pour "
+                "ce match. Vous pouvez utiliser celles "
+                "disponibles, ajouter un EXTRA précis ou "
+                "compléter les informations avant une "
+                "régénération."
+            )
             if options.get("_complement"):
-                st.caption("Complément utile : " + str(options["_complement"]))
+                st.caption(
+                    "Complément utile : "
+                    + str(options["_complement"])
+                )
+
         if display_diagnostics:
-            with st.expander(f"Détails de génération — {mid}"):
-                for message in dict.fromkeys(display_diagnostics):
+            with st.expander(
+                f"Détails de génération — {mid}"
+            ):
+                for message in dict.fromkeys(
+                    display_diagnostics
+                ):
                     st.write(message)
-        if options.get("_market_version") != MARKET_FORMAT_VERSION:
-            st.caption("Options d'une version précédente : régénérez-les pour utiliser la nouvelle sélection des candidats.")
+
+        if (
+            options.get("_market_version")
+            != MARKET_FORMAT_VERSION
+        ):
+            st.caption(
+                "Options d'une version précédente : "
+                "régénérez-les pour utiliser la nouvelle "
+                "sélection des candidats."
+            )
 
     if failed:
-        if st.button("🔄 Réessayer les générations échouées"):
+        if st.button(
+            "🔄 Réessayer les générations échouées"
+        ):
             for mid in failed:
                 S["options_results"].pop(mid, None)
             st.rerun()
@@ -2241,7 +2906,9 @@ elif S["step"] == "options_ready":
         "M1: A=1.85 B=1.70 C=1.90. "
         "Vous pouvez ne renseigner que les options disponibles."
     )
-    key = widget_value("cotes_text", S["data_cotes_text"])
+    key = widget_value(
+        "cotes_text", S["data_cotes_text"]
+    )
     st.text_area(
         "Cotes du bookmaker",
         height=230,
@@ -2253,12 +2920,15 @@ elif S["step"] == "options_ready":
 
     st.markdown("### 💎 Marchés EXTRA")
     st.caption(
-        "Optionnel : plusieurs lignes M1_EXTRA sont possibles pour un même match (10 maximum). "
-        "Décrivez exactement le marché, la ligne et la période. Exemple de format : "
-        "M1_EXTRA: Boston Celtics Over 112.5 points, match entier, prolongations incluses=1.85. "
-        "Utilisez le point pour les décimales dans la description."
+        "Optionnel : plusieurs lignes M1_EXTRA sont possibles "
+        "pour un même match (10 maximum). Décrivez exactement "
+        "le marché, la ligne et la période. Exemple : "
+        "M1_EXTRA: Boston Celtics Over 112.5 points, match "
+        "entier, prolongations incluses=1.85."
     )
-    key = widget_value("extra_text", S["data_extra_text"])
+    key = widget_value(
+        "extra_text", S["data_extra_text"]
+    )
     st.text_area(
         "Marchés supplémentaires",
         height=130,
@@ -2268,73 +2938,125 @@ elif S["step"] == "options_ready":
     )
     S["data_extra_text"] = S[key]
 
-    cotes, errors = parse_cotes_input(S["data_cotes_text"])
-    extras, extra_errors = parse_extra_input(S["data_extra_text"])
+    cotes, errors = parse_cotes_input(
+        S["data_cotes_text"]
+    )
+    extras, extra_errors = parse_extra_input(
+        S["data_extra_text"]
+    )
     errors.extend(extra_errors)
 
-    known = {match["mid"] for match in matches}
-    unknown = (set(cotes) | set(extras)) - known
+    known = {
+        match["mid"] for match in matches
+    }
+    unknown = (
+        set(cotes) | set(extras)
+    ) - known
     if unknown:
         errors.append(
-            "Identifiants inconnus : " + ", ".join(sorted(unknown))
+            "Identifiants inconnus : "
+            + ", ".join(sorted(unknown))
         )
 
     for match in matches:
-        for letter in cotes.get(match["mid"], {}):
+        for letter in cotes.get(
+            match["mid"], {}
+        ):
             try:
-                validate_option(S["options_results"].get(match["mid"], {}).get(letter), match, info.get(match["mid"], ""))
+                validate_option(
+                    S["options_results"]
+                    .get(match["mid"], {})
+                    .get(letter),
+                    match,
+                    info.get(match["mid"], ""),
+                )
             except ValueError:
-                errors.append(f"{match['mid']} {letter} : aucune proposition complète affichée. Retirez sa cote ou régénérez les options.")
+                errors.append(
+                    f"{match['mid']} {letter} : aucune "
+                    "proposition complète affichée. Retirez "
+                    "sa cote ou régénérez les options."
+                )
 
     uncovered = [
         mid for mid in known
-        if not cotes.get(mid) and mid not in extras
+        if not cotes.get(mid)
+        and mid not in extras
     ]
     if uncovered:
         st.info(
-            "Sans cote ni marché EXTRA, ces matchs seront exclus : "
-            + ", ".join(sorted(uncovered))
+            "Sans cote ni marché EXTRA, ces matchs seront "
+            "exclus : " + ", ".join(sorted(uncovered))
         )
 
     for error in errors:
         st.warning(error)
 
     st.info(
-        f"Seuil individuel : {validity_rate(S['cote_cible']):.0%}. "
+        f"Seuil individuel : "
+        f"{validity_rate(S['cote_cible']):.0%}. "
         f"Marge cible : ±{S['tolerance']:.0%}. "
         "Une seule sélection par match sera retenue."
     )
 
-    confirm_key = widget_value("confirm_markets", False)
-    confirmed = st.checkbox("J'ai vérifié que les cotes correspondent exactement aux résultats, lignes, périodes et règles du bookmaker.", key=confirm_key)
-    st.caption("Une ligne entière peut comporter un remboursement selon le règlement. Le calcul de probabilité combinée ne modélise pas séparément les remboursements. Si la ligne ou le périmètre diffère, ajoutez le marché exact en EXTRA pour le réévaluer.")
+    confirm_key = widget_value(
+        "confirm_markets", False
+    )
+    confirmed = st.checkbox(
+        "J'ai vérifié que les cotes correspondent exactement "
+        "aux résultats, lignes, périodes et règles du "
+        "bookmaker.",
+        key=confirm_key,
+    )
+    st.caption(
+        "Une ligne entière peut comporter un remboursement "
+        "selon le règlement. Le calcul de probabilité combinée "
+        "ne modélise pas séparément les remboursements. Si la "
+        "ligne ou le périmètre diffère, ajoutez le marché exact "
+        "en EXTRA pour le réévaluer."
+    )
+
     if st.button(
         "🚩 Finaliser l'analyse",
-        disabled=bool(errors) or not (cotes or extras) or bool(failed) or not confirmed,
+        disabled=(
+            bool(errors)
+            or not (cotes or extras)
+            or bool(failed)
+            or not confirmed
+        ),
     ):
         try:
             with st.spinner(
-                "Évaluation des marchés EXTRA et recherche du coupon..."
+                "Évaluation des marchés EXTRA et recherche "
+                "du coupon..."
             ):
-                result = build_final_result(cotes, extras)
+                result = build_final_result(
+                    cotes, extras
+                )
 
-            for notice in S.get("evaluation_notices", []):
+            for notice in S.get(
+                "evaluation_notices", []
+            ):
                 st.warning(notice)
+
             if result is None:
                 st.error(
-                    "Aucune option n'atteint le seuil individuel requis "
-                    "avec une cote exploitable. Le seuil n'a pas été abaissé."
+                    "Aucune option n'atteint le seuil "
+                    "individuel requis avec une cote "
+                    "exploitable. Le seuil n'a pas été abaissé."
                 )
             else:
                 S["final_result"] = result
                 S["final_justification"] = ""
-                S["final_justification_combo"] = None
+                S[
+                    "final_justification_combo"
+                ] = None
                 S["step"] = "final"
                 record_progress()
                 st.rerun()
         except Exception as error:
             st.error(
-                "Finalisation impossible : " + str(error)[:350]
+                "Finalisation impossible : "
+                + str(error)[:350]
             )
 
     record_progress()
@@ -2349,23 +3071,31 @@ elif S["step"] == "final":
     result = S.get("final_result")
 
     if not result or not result.get("combo"):
-        st.error("Aucun coupon enregistré dans cette analyse.")
+        st.error(
+            "Aucun coupon enregistré dans cette analyse."
+        )
         if st.button("↩️ Revenir aux options"):
             S["step"] = "options_ready"
             st.rerun()
         st.stop()
 
-    for notice in result.get("evaluation_notices", []):
+    for notice in result.get(
+        "evaluation_notices", []
+    ):
         st.warning(notice)
+
     combo = result["combo"]
     total = math.prod(
-        float(item["chosen_cote"]) for item in combo
+        float(item["chosen_cote"])
+        for item in combo
     )
     combined = math.prod(
         normalize_probability(item["chosen_prob"])
         for item in combo
     )
-    tolerance = result.get("tolerance", S["tolerance"])
+    tolerance = result.get(
+        "tolerance", S["tolerance"]
+    )
     within = (
         S["cote_cible"] * (1 - tolerance)
         <= total
@@ -2374,15 +3104,17 @@ elif S["step"] == "final":
 
     if within:
         st.success(
-            f"Coupon proposé — cote totale : {total:.2f} "
-            f"| cible : {S['cote_cible']:.2f}"
+            f"Coupon proposé — cote totale : "
+            f"{total:.2f} | cible : "
+            f"{S['cote_cible']:.2f}"
         )
     else:
         st.warning(
-            f"Aucun coupon dans la marge ±{tolerance:.0%} "
-            "n'a été trouvé par la recherche bornée. "
-            f"Alternative la plus proche trouvée : {total:.2f} "
-            f"pour une cible de {S['cote_cible']:.2f}."
+            f"Aucun coupon dans la marge "
+            f"±{tolerance:.0%} n'a été trouvé par la "
+            "recherche bornée. Alternative la plus proche "
+            f"trouvée : {total:.2f} pour une cible de "
+            f"{S['cote_cible']:.2f}."
         )
 
     st.write(
@@ -2400,10 +3132,14 @@ elif S["step"] == "final":
     )
 
     saved_threshold = result.get("threshold")
-    current_threshold = validity_rate(S["cote_cible"])
+    current_threshold = validity_rate(
+        S["cote_cible"]
+    )
     if (
         saved_threshold is None
-        or abs(saved_threshold - current_threshold) > 0.00001
+        or abs(
+            saved_threshold - current_threshold
+        ) > 0.00001
     ):
         st.info(
             "Ce résultat provient d'une ancienne analyse. "
@@ -2412,21 +3148,36 @@ elif S["step"] == "final":
 
     for item in combo:
         outcome = item.get("chosen_resultat", "")
+        confidence = item.get(
+            "chosen_confiance", "faible"
+        )
+        confidence_emoji = {
+            "élevé": "🟢",
+            "moyen": "🟡",
+            "faible": "🔴",
+        }.get(confidence, "🔴")
+
         st.markdown(
             "<div class='option-card'>"
             f"🎯 <b>{esc(item['mid'])} — "
             f"{esc(item.get('home', ''))} contre "
             f"{esc(item.get('away', ''))}</b><br>"
-            f"Marché : {esc(item.get('chosen_marche', ''))}<br>"
-            f"Période : {esc(item.get('chosen_periode', 'non enregistrée'))} — "
-            f"prolongations : {esc(item.get('chosen_prolongations', 'à vérifier'))}<br>"
+            f"Marché : "
+            f"{esc(item.get('chosen_marche', ''))}<br>"
+            f"Période : "
+            f"{esc(item.get('chosen_periode', 'non enregistrée'))} — "
+            f"prolongations : "
+            f"{esc(item.get('chosen_prolongations', 'à vérifier'))}<br>"
             + (
                 f"Résultat : {esc(outcome)}<br>"
                 if outcome else ""
             )
-            + f"Cote : {float(item['chosen_cote']):.2f}<br>"
+            + f"Cote : "
+            f"{float(item['chosen_cote']):.2f}<br>"
             f"📊 Probabilité estimée : "
-            f"{normalize_probability(item['chosen_prob']):.1%}"
+            f"{normalize_probability(item['chosen_prob']):.1%}<br>"
+            f"{confidence_emoji} Niveau de confiance : "
+            f"{esc(confidence)}"
             "</div>",
             unsafe_allow_html=True,
         )
@@ -2434,8 +3185,9 @@ elif S["step"] == "final":
     signature = fingerprint(combo)
 
     if not S["final_justification"]:
-        with st.spinner("Rédaction de la justification..."):
-            # Les anciennes sauvegardes n'ont pas ces champs.
+        with st.spinner(
+            "Rédaction de la justification..."
+        ):
             justification_result = {
                 **result,
                 "total_odds": total,
@@ -2443,7 +3195,9 @@ elif S["step"] == "final":
                 "within_tolerance": within,
             }
             S["final_justification"] = (
-                generate_final_justification(justification_result)
+                generate_final_justification(
+                    justification_result
+                )
             )
         S["final_justification_combo"] = signature
 
@@ -2452,12 +3206,19 @@ elif S["step"] == "final":
         fix_elisions(S["final_justification"])
     )
 
-    selected_mids = {item["mid"] for item in combo}
-    with st.expander("📋 Tous les matchs et options évalués"):
-        for match in result.get("all_evaluated", []):
+    selected_mids = {
+        item["mid"] for item in combo
+    }
+    with st.expander(
+        "📋 Tous les matchs et options évalués"
+    ):
+        for match in result.get(
+            "all_evaluated", []
+        ):
             mid = match.get("mid", "")
             st.write(
-                f"{mid} — {match.get('home', '')} contre "
+                f"{mid} — "
+                f"{match.get('home', '')} contre "
                 f"{match.get('away', '')}"
             )
             candidates = match.get("candidates")
@@ -2467,7 +3228,8 @@ elif S["step"] == "final":
                         f"{candidate.get('letter', '')} : "
                         f"{candidate.get('chosen_marche', '')} — "
                         f"{candidate.get('chosen_resultat', '')} | "
-                        f"cote {candidate.get('chosen_cote')} | "
+                        f"cote "
+                        f"{candidate.get('chosen_cote')} | "
                         f"estimation "
                         f"{candidate.get('chosen_prob', 0):.1%}"
                     )
@@ -2477,16 +3239,20 @@ elif S["step"] == "final":
                     else match.get("status", "")
                 )
             else:
-                # Affichage compatible avec l'ancien format.
                 st.write(
-                    f"Marché : {match.get('chosen_marche', '-')} | "
-                    f"cote : {match.get('chosen_cote', '-')} | "
-                    f"statut : {match.get('status', '')}"
+                    f"Marché : "
+                    f"{match.get('chosen_marche', '-')} | "
+                    f"cote : "
+                    f"{match.get('chosen_cote', '-')} | "
+                    f"statut : "
+                    f"{match.get('status', '')}"
                 )
 
     left, right = st.columns(2)
     with left:
-        if st.button("↩️ Modifier les cotes et recalculer"):
+        if st.button(
+            "↩️ Modifier les cotes et recalculer"
+        ):
             S["step"] = "options_ready"
             st.rerun()
     with right:
