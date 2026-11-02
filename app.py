@@ -2833,7 +2833,7 @@ elif S["step"] == "options_ready":
                 for letter in ["A", "B", "C"]
             ]
 
-            options_list.sort(
+        options_list.sort(
                 key=lambda item: normalize_probability(
                     item[1].get("probabilite", 0)
                 ),
