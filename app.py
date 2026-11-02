@@ -2845,7 +2845,7 @@ elif S["step"] == "options_ready":
                 best_option.get("probabilite", 0)
             )
 
-            st.markdown(
+        st.markdown(
                 "<div class='option-card'>"
                 f"⭐ <b>Option la plus probable — {best_letter}</b><br>"
                 f"Marché : {esc(best_option.get('marche', ''))}<br>"
