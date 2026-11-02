@@ -2747,15 +2747,10 @@ def render_options_step():
     st.divider()
     st.markdown("### Saisie des cotes")
 
-    st.caption(
-        "Format attendu :
-
-"
-        "M1: A=1.56
-
-"
-        "M2: A=1.85 B=1.70"
-    )
+    st.caption("Format attendu :")
+    st.code("M1: A=1.56")
+    st.caption("Plusieurs options sur la même ligne :")
+    st.code("M2: A=1.85 B=1.70")
 
     cotes_key = widget_value(
         "cotes",
@@ -2775,20 +2770,15 @@ def render_options_step():
     S["data_cotes_parsed"] = parsed_cotes
 
     if cotes_errors:
-        st.error("
-".join(cotes_errors))
+        st.error(" | ".join(cotes_errors))
 
     st.markdown("### Marchés EXTRA")
 
-    st.caption(
-        "Format attendu :
-
-"
-        "M1_EXTRA: Total_Under_225.5=1.66
-
-"
-        "M2_EXTRA: Joueur_Over_25_points=1.80"
-    )
+    st.caption("Format attendu :")
+    st.code("M1_EXTRA: Total_Under_225.5=1.66")
+    st.caption("Plusieurs marchés EXTRA pour le même match :")
+    st.code("M1_EXTRA: Total_Under_225.5=1.66")
+    st.code("M1_EXTRA: Joueur_Over_25_points=1.80")
 
     extra_key = widget_value(
         "extra",
@@ -2824,7 +2814,7 @@ def render_options_step():
     ):
         S["stage"] = "final"
         st.rerun()
-    
+
 
 # ============================================================
 # ÉTAPE 5 — RÉSULTAT FINAL
