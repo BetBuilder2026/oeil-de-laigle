@@ -2863,6 +2863,8 @@ elif S["step"] == "options_ready":
                         probability = normalize_probability(
                             option.get("probabilite", 0)
                         )
+                            if not option.get("marche") or not option.get("resultat"):
+                            continue
                         retained = probability >= S["threshold"]
 
                         badge = (
