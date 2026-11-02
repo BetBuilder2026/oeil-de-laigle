@@ -232,12 +232,7 @@ def esc(value):
 
 
 def fingerprint(value):
-    raw = json.dumps(
-        value,
-        ensure_ascii=False,
-        sort_keys=True,
-        default=str,
-    )
+    raw = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
@@ -251,7 +246,7 @@ def normalize_probability(value):
     if not math.isfinite(value):
         return 0.0
     if value > 1:
-        value /= 100.0
+        value = value / 100.0
     return max(0.0, min(1.0, value))
 
 
@@ -263,12 +258,18 @@ def valid_odds(value):
         return False
 
 
-def validity_rate(cote_cible):
-    return (
-        DEFAULT_CONFIDENCE_THRESHOLD
-        if float(cote_cible) <= HIGH_ODDS_THRESHOLD
-        else HIGH_ODDS_CONFIDENCE
-    )
+def parse_odd(value):
+    try:
+        value = float(str(value).replace(",", "."))
+        return value if math.isfinite(value) and value > 1.0 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def min_odds_for(coupon_size):
+    if coupon_size <= 1:
+        return MIN_ODDS_SIMPLE
+    return MIN_ODDS_COMBO
 
 
 def estimated_selections(cote_cible):
@@ -280,20 +281,15 @@ def estimated_selections(cote_cible):
     )
 
 
-def recommended_matches(cote_cible, cap):
-    count = estimated_selections(cote_cible)
-    reserve = math.ceil(count / validity_rate(cote_cible))
-    return min(cap, max(2, reserve))
-
-
 def determine_mode_params(cote_cible):
     estimate = estimated_selections(cote_cible)
+
     if cote_cible <= 3.0:
         mode = "simple_double"
         max_size = 2
         days = 2
         cap = MAX_POOL_SIMPLE_COMBO
-    elif estimate <= 5:
+    elif estimate < 5:
         mode = "combo_info"
         max_size = estimate
         days = 7
@@ -304,48 +300,36 @@ def determine_mode_params(cote_cible):
         days = 7
         cap = MAX_POOL_MULTI_AUTO
 
-    return (
-        mode,
-        max_size,
-        days,
-        recommended_matches(cote_cible, cap),
-        validity_rate(cote_cible),
-    )
+    count = estimated_selections(cote_cible)
+    reserve = math.ceil(count / 0.6)
+    recommended = min(cap, max(2, reserve))
+
+    return mode, max_size, days, recommended, cap
 
 
 def fix_elisions(text):
-    text = str(text or "").replace("’", "'").replace("ʼ", "'")
-    text = re.sub(
-        r"\b([ldjcmnstLDJCMNST])s*'s*(?=w)",
-        lambda m: m.group(1) + "'",
-        text,
-    )
-    for letters, words in [
-        (
-            "Ll",
-            "analyse|équipe|absence|attaque|objectif|utilisateur|"
-            "application|historique",
-        ),
-        (
-            "Dd",
-            "analyse|équipe|informations|information|incertitude|"
-            "ailleurs|abord",
-        ),
-        ("Cc", "est|était"),
-        ("Jj", "ai|avais"),
-    ]:
-        text = re.sub(
-            rf"\b([{letters}])s+({words})\b",
-            lambda m: m.group(1) + "'" + m.group(2),
-            text,
-        )
+    text = str(text or "")
+    text = text.replace(" ’", "’").replace("‘ ", "‘")
+
+    patterns = [
+        (r"([LlDdJjCcNnSs])s+([aàeéèiîoôuùh])", r"\u0001’\u0002"),
+        (r"([LlDdJjCcNnSs])’ ([aàeéèiîoôuùh])", r"\u0001’\u0002"),
+        (r"c [eé]", "c’est"),
+        (r"j [aà]", "j’ai"),
+        (r"n [eé]", "n’"),
+        (r"s [eé]", "s’"),
+    ]
+
+    for pattern, replacement in patterns:
+        text = re.sub(pattern, replacement, text)
+
     return text
 
 
 def clean_justification_text(text):
-    text = re.sub(r"```[a-zA-Z]*", "", str(text or ""))
-    text = re.sub(r"[{}[]*#]", "", text)
-    return fix_elisions(text.strip())
+    text = re.sub(r"[*_#`]", "", str(text or ""))
+    text = re.sub(r"[ ]{2,}", " ", text)
+    return fix_elisions(text).strip()
 
 
 def display_aerated(text):
@@ -387,6 +371,7 @@ def extract_info_by_mid(text):
         for mid, content in result.items()
     }
 
+
 def missing_information(text, matches):
     parsed = extract_info_by_mid(text)
     return [
@@ -399,115 +384,114 @@ def missing_information(text, matches):
 def parse_cotes_input(text):
     result = {}
     errors = []
-    seen = set()
 
     for number, line in enumerate((text or "").splitlines(), 1):
         if not line.strip():
             continue
 
-        match = re.fullmatch(
-            r"s*(Md+)s*:s*(.*?)s*",
-            line,
-            re.IGNORECASE,
+        match = re.match(
+            "^[Mm]([0-9]+)[ ]*:[ ]*(.+)$",
+            line.strip(),
         )
+
         if not match:
             errors.append(
                 f"Ligne {number} : format M1: A=1.50 attendu."
             )
             continue
 
-        mid, content = match.groups()
-        mid = mid.upper()
-        if mid in seen:
-            errors.append(
-                f"{mid} : plusieurs lignes pour le même match."
-            )
-            continue
-        seen.add(mid)
-
+        mid = "M" + match.group(1)
         values = {}
-        pattern = r"([ABC])s*=s*(d+(?:[.,]d+)?)"
-        tokens = list(
-            re.finditer(pattern, content, re.IGNORECASE)
-        )
-        remainder = re.sub(
-            pattern, "", content, flags=re.IGNORECASE
-        )
-        remainder = re.sub(r"[s;]+", "", remainder)
-
-        if remainder:
-            errors.append(
-                f"{mid} : texte ou cote non reconnu."
-            )
+        tokens = match.group(2).split()
 
         for token in tokens:
-            letter = token.group(1).upper()
-            value = float(token.group(2).replace(",", "."))
+            token_match = re.match(
+                "^([A-Za-z]+)=([0-9]+[.,][0-9]+|[0-9]+)$",
+                token,
+            )
+
+            if not token_match:
+                errors.append(
+                    f"Ligne {number} : option invalide « {token} ». "
+                    "Format attendu : A=1.50"
+                )
+                continue
+
+            letter = token_match.group(1).upper()
+            odd = parse_odd(token_match.group(2))
+
+            if odd is None:
+                errors.append(
+                    f"Ligne {number} : cote invalide pour {letter}."
+                )
+                continue
+
             if letter in values:
                 errors.append(
-                    f"{mid} : option {letter} répétée."
+                    f"Ligne {number} : option {letter} répétée."
                 )
-            if not valid_odds(value):
-                errors.append(
-                    f"{mid} : la cote {letter} doit dépasser 1."
-                )
-            else:
-                values[letter] = value
+                continue
 
-        if not values:
-            errors.append(f"{mid} : aucune cote valide.")
-        result[mid] = values
+            values[letter] = odd
+
+        if values:
+            result[mid] = values
 
     return result, errors
 
 
 def parse_extra_input(text):
-    result, errors = {}, []
+    result = {}
+    errors = []
 
-    for number, line in enumerate(
-        (text or "").splitlines(), 1
-    ):
+    for number, line in enumerate((text or "").splitlines(), 1):
         if not line.strip():
             continue
 
-        match = re.fullmatch(
-            r"s*(Md+)_EXTRAs*:s*(.+)s*=s*"
-            r"(d+(?:[.,]d+)?)s*",
-            line,
-            re.IGNORECASE,
+        match = re.match(
+            "^[Mm]([0-9]+)[_]EXTRA[ ]*:[ ]*(.+)$",
+            line.strip(),
         )
+
         if not match:
             errors.append(
                 f"EXTRA ligne {number} : format "
-                "M1_EXTRA: description complète=1.65 attendu."
+                "M1_EXTRA: Total_Under_225.5=1.66 attendu."
             )
             continue
 
-        mid, name, value = match.groups()
-        mid, name = mid.upper(), name.strip()
-        odds = float(value.replace(",", "."))
-        items = result.setdefault(mid, [])
+        mid = "M" + match.group(1)
+        payload = match.group(2)
 
-        if not valid_odds(odds):
+        if "=" not in payload:
             errors.append(
-                f"{mid} : cote EXTRA supérieure à 1 requise."
+                f"EXTRA ligne {number} : cote manquante. "
+                "Format attendu : M1_EXTRA: Total_Under_225.5=1.66"
             )
-        elif len(items) >= MAX_EXTRA_PER_MATCH:
+            continue
+
+        description, raw_odd = payload.rpartition("=")[0], payload.rpartition("=")[2]
+        description = description.strip()
+        odd = parse_odd(raw_odd)
+
+        if not description:
             errors.append(
-                f"{mid} : maximum {MAX_EXTRA_PER_MATCH} EXTRA."
+                f"EXTRA ligne {number} : description du marché manquante."
             )
-        elif any(
-            item["marche"].casefold() == name.casefold()
-            for item in items
-        ):
+            continue
+
+        if odd is None:
             errors.append(
-                f"{mid} : marché EXTRA répété."
+                f"EXTRA ligne {number} : cote invalide."
             )
-        else:
-            items.append({
-                "marche": name,
-                "cote": odds,
-            })
+            continue
+
+        result.setdefault(mid, []).append(
+            {
+                "description": description,
+                "cote": odd,
+            }
+        )
 
     return result, errors
 
@@ -526,10 +510,11 @@ def initialize_analysis():
 
 def reset_analysis():
     clear_widget_state()
+
     for key, value in ANALYSIS_DEFAULTS.items():
         S[key] = copy.deepcopy(value)
+
     S["confirm_delete"] = None
-    S["evaluation_notices"] = []
     S["last_saved_signature"] = None
     S["history_error"] = ""
 
@@ -551,15 +536,19 @@ def widget_value(name, initial):
 
 def capture_text(field, widget_key):
     value = S.get(widget_key, "")
+
     if S.get(field) != value:
         S[field] = value
         S.pop("widget_confirm_markets", None)
+
         if field == "data_info_text":
-            regenerate_options()
+            reset_results()
         else:
             S["final_result"] = None
             S["final_justification"] = ""
             S["final_justification_combo"] = None
+
+
 # ============================================================
 # GOOGLE SHEETS ET COMPTES
 # ============================================================
