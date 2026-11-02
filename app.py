@@ -223,6 +223,9 @@ STAGE_LABELS = {
 # UTILITAIRES
 # ============================================================
 
+S = st.session_state
+
+
 def utc_now():
     return datetime.now(timezone.utc)
 
