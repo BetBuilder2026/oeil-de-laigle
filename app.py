@@ -1462,6 +1462,10 @@ jamais être présenté comme un pourcentage de réussite.
 dans les informations fournies. N'utilise jamais un joueur listé comme
 absent.
 - Si un marché est ambigu, imprécis ou non vérifiable, ne le propose pas.
+- Pour tout marché de total (buts, points, jeux, cartons, corners),
+précise obligatoirement la ligne numérique exacte et le sens :
+par exemple "Total buts 2.5 — Over" ou "Total buts 2.5 — Under".
+Un total sans ligne numérique ou sans sens doit être exclu.
 
 Réponds uniquement en JSON valide :
 {{
