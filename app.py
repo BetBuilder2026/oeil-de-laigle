@@ -2855,7 +2855,7 @@ elif S["step"] == "options_ready":
                 unsafe_allow_html=True,
             )
 
-            other_options = options_list[1:]
+         other_options = options_list[1:]
 
             if other_options:
                 with st.expander("🔍 Voir les autres options générées"):
