@@ -2828,7 +2828,7 @@ elif S["step"] == "options_ready":
             options.get("_diagnostics") or []
         )
 
-            options_list = [
+        options_list = [
                 (letter, options.get(letter, {}))
                 for letter in ["A", "B", "C"]
             ]
