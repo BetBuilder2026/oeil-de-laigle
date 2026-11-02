@@ -375,6 +375,7 @@ def display_aerated(text):
             st.write(paragraph)
 
 
+
 def extract_info_by_mid(text):
     result = {}
     current = None
@@ -388,14 +389,12 @@ def extract_info_by_mid(text):
             current = match.group(1).upper()
             result[current] = ""
         elif current:
-            result[current] += line + "
-"
+            result[current] = result[current] + line + chr(10)
 
     return {
         mid: content.strip()
         for mid, content in result.items()
     }
-
 
 def missing_information(text, matches):
     parsed = extract_info_by_mid(text)
