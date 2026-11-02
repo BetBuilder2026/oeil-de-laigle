@@ -1072,7 +1072,7 @@ def prepare_pool(matches, limit):
 
 
 # ============================================================
-# GEMINI
+# GÉNÉRATION GEMINI
 # ============================================================
 
 def configure_gemini():
@@ -1085,34 +1085,29 @@ def configure_gemini():
 
 
 def extract_json(text):
-    text = re.sub(
-        r"^```(?:json)?s*|s*```$",
-        "",
-        str(text or "").strip(),
-        flags=re.IGNORECASE,
-    )
+    text = str(text or "").strip()
+    text = text.replace("```json", "")
+    text = text.replace("```", "")
+    text = text.strip()
+
     try:
         value = json.loads(text)
     except ValueError:
         start = text.find("{")
         if start < 0:
-            raise ValueError(
-                "Aucun objet JSON dans la réponse."
-            )
-        value, _ = json.JSONDecoder().raw_decode(
-            text[start:]
-        )
+            raise ValueError("Aucun objet JSON dans la réponse.")
+        value, _ = json.JSONDecoder().raw_decode(text[start:])
 
     if not isinstance(value, dict):
-        raise ValueError(
-            "La réponse JSON doit être un objet."
-        )
+        raise ValueError("La réponse JSON doit être un objet.")
+
     return value
 
 
 def generate_json(prompt):
     model = configure_gemini()
     errors = []
+
     for strict in (True, False):
         try:
             kwargs = {}
@@ -1122,279 +1117,24 @@ def generate_json(prompt):
                         response_mime_type="application/json"
                     )
                 )
-            response = model.generate_content(
-                prompt, **kwargs
-            )
+            response = model.generate_content(prompt, kwargs)
             return extract_json(response.text)
         except Exception as error:
             errors.append(str(error)[:200])
-    raise ValueError(" / ".join(errors))
-SIMPLE_MARKET_RULES = """
-Adapte librement les marchés aux informations de CE match uniquement.
-Chaque proposition comprend : marche, resultat précis, probabilite (nombre décimal
-strictement entre 0 et 1), periode précise, prolongations (incluses/exclues/sans objet,
-ou à vérifier), justification courte fondée sur le texte, et niveau_confiance
-parmi "élevé", "moyen" ou "faible".
-Ajoute joueur (nom exact, sinon chaîne vide), statistique et appuis_joueur (citations du
-texte, sinon liste vide) pour un marché de statistique joueur.
-Une victoire de tennis n'est pas un pari de statistique joueur.
-Ne propose de statistique joueur que si le texte insiste sur les performances de ce
-joueur et contient des éléments concrets pertinents pour la statistique visée.
-Une mention dans la composition, une absence ou sa seule présence ne suffisent pas.
-Ne crée aucun joueur ni fait sportif. Les appuis doivent être des citations exactes.
-Un total exige Over/Under ET un seuil numérique avec unité. Un total individuel nomme
-l'équipe. Un handicap exige l'équipe et une ligne signée. Une marge de victoire doit
-distinguer exactement, au moins ou intervalle, sans être appelée handicap.
-Précise la première/deuxième mi-temps ou le quart-temps, jamais 'mi-temps' seul.
-Les lignes sont des propositions non vérifiées chez le bookmaker. Les périodes et règles
-sont le périmètre proposé à vérifier, pas une offre réellement récupérée.
-La règle d'égalité n'est PAS obligatoire pour générer une proposition. Ne bloque pas
-une ligne entière pour ce motif. Le règlement sera vérifié à la saisie des cotes.
-Ne gonfle pas les probabilités pour atteindre un seuil de sélection.
-Une estimation manquante est null, jamais 0. Indique alors une raison précise.
-Les probabilités sont des estimations non calibrées ; pas des garanties de réussite.
-Le niveau de confiance n'est pas une probabilité calibrée.
-"""
+
+    raise ValueError(" | ".join(errors))
 
 
-def market_key(option):
-    return tuple(
-        " ".join(
-            str(option.get(k, "")).casefold().split()
-        )
-        for k in (
-            "marche",
-            "resultat",
-            "periode",
-            "prolongations",
-        )
-    )
+def normalize_confidence(value):
+    value = str(value or "").strip().lower()
 
-
-def validate_option(raw, match, information):
-    if not isinstance(raw, dict):
-        raise ValueError(
-            "La proposition n'a pas été fournie."
-        )
-
-    p = raw.get("probabilite")
-    if (
-        isinstance(p, bool)
-        or not isinstance(p, (int, float))
-        or not math.isfinite(p)
-        or not 0 < p < 1
-    ):
-        raise ValueError(
-            str(
-                raw.get("raison")
-                or "Estimation à préciser à partir des "
-                "informations du match."
-            )
-        )
-
-    market = str(raw.get("marche") or "").strip()
-    outcome = str(raw.get("resultat") or "").strip()
-    if not market or not outcome:
-        raise ValueError(
-            "Le marché ou le résultat précis manque."
-        )
-
-    period = str(
-        raw.get("periode") or "match entier"
-    ).strip()
-    overtime = str(
-        raw.get("prolongations")
-        or "à vérifier chez le bookmaker"
-    ).strip()
-
-    text = (
-        market + " " + outcome
-    ).casefold().replace("_", " ")
-    number = r"[+-]?d+(?:[.,]d+)?"
-    total_words = (
-        r"\b(over|under|plus de|moins de|au moins|au plus)\b"
-    )
-
-    if (
-        re.search(r"\bover\b|\bunder\b|\btotal\b", text)
-        or re.search(total_words, outcome.casefold())
-    ):
-        if not re.search(
-            total_words + r"s*" + number,
-            outcome.casefold(),
-        ):
-            raise ValueError(
-                "Le total doit préciser son sens et sa ligne "
-                "numérique."
-            )
-        if not re.search(
-            r"points?|buts?|jeux|sets?|rebonds?|passes|tirs|"
-            r"corners?|cartons?|aces?|fautes|yards?|touchdowns?|"
-            r"interceptions?|arrêts?|minutes?|rebounds?|assists?",
-            text,
-        ):
-            raise ValueError(
-                "Précisez l'unité de la statistique."
-            )
-
-    if re.search(
-        r"handicap|spread", market.casefold()
-    ):
-        if not re.search(
-            r"[+-]s*d+(?:[.,]d+)?", outcome
-        ):
-            raise ValueError(
-                "Le handicap doit comporter une ligne signée."
-            )
-        if re.search(
-            r"d+s*(?:à|a|au)s*d+", outcome
-        ):
-            raise ValueError(
-                "Un intervalle de victoire n'est pas un handicap."
-            )
-
-    if (
-        re.search(r"marge|écart", market.casefold())
-        and not re.search(number, outcome)
-    ):
-        raise ValueError(
-            "La marge doit préciser un écart numérique."
-        )
-
-    if period.casefold() in {
-        "mi-temps",
-        "mi temps",
-        "quart-temps",
-        "quart temps",
-        "période",
-    }:
-        raise ValueError(
-            "Le numéro de la période doit être précisé."
-        )
-
-    player = str(raw.get("joueur") or "").strip()
-    if (
-        re.search(r"joueur|player", market.casefold())
-        and not player
-    ):
-        raise ValueError(
-            "Le joueur concerné doit être identifié."
-        )
-
-    if player:
-        source = " ".join(
-            information.casefold().split()
-        )
-        if (
-            player.casefold() not in source
-            or player.casefold() not in outcome.casefold()
-        ):
-            raise ValueError(
-                "Le joueur doit figurer dans les informations "
-                "et le résultat."
-            )
-
-        quotes = (
-            raw.get("appuis_joueur")
-            or raw.get("appui_joueur")
-            or []
-        )
-        if not isinstance(quotes, list) or not quotes:
-            raise ValueError(
-                "Le pari joueur doit être appuyé par ses "
-                "performances dans le texte."
-            )
-
-        quotes = [
-            " ".join(str(q).casefold().split())
-            for q in quotes
-        ]
-        if any(
-            len(q) < 15 or q not in source
-            for q in quotes
-        ):
-            raise ValueError(
-                "Les appuis joueur doivent provenir du texte "
-                "fourni."
-            )
-
-        statistic = str(
-            raw.get("statistique") or ""
-        ).casefold().strip()
-        if (
-            not statistic
-            or statistic not in " ".join(quotes)
-            or not any(re.search(r"d", q) for q in quotes)
-        ):
-            raise ValueError(
-                "Le texte doit étayer la statistique joueur avec "
-                "des performances chiffrées."
-            )
-
-        if not re.search(number, outcome):
-            raise ValueError(
-                "Le pronostic joueur doit préciser un seuil ou "
-                "une valeur."
-            )
-
-    confidence = str(
-        raw.get("niveau_confiance") or "faible"
-    ).strip().lower()
-
-    if confidence not in ("élevé", "moyen", "faible"):
-        confidence = "faible"
-
-    return {
-        **raw,
-        "marche": fix_elisions(market),
-        "resultat": fix_elisions(outcome),
-        "probabilite": float(p),
-        "niveau_confiance": confidence,
-        "periode": period,
-        "prolongations": overtime,
-        "justification": fix_elisions(
-            raw.get("justification")
-            or "Estimation fondée sur les informations fournies."
-        ),
-        "_validation_error": "",
-    }
-
-
-def collect_candidates(parsed):
-    candidates = parsed.get("candidats")
-    if isinstance(candidates, list):
-        return candidates[:8]
-
-    candidates = parsed.get("options")
-    if isinstance(candidates, list):
-        return candidates[:8]
-
-    if isinstance(candidates, dict):
-        return [
-            candidates.get(k)
-            for k in ("A", "B", "C")
-            if k in candidates
-        ]
-
-    return [
-        parsed.get(k)
-        for k in ("A", "B", "C")
-        if k in parsed
-    ]
-
-
-def regenerate_options():
-    reset_results()
-    S["data_cotes_text"] = ""
-    S["data_extra_text"] = ""
-    S["evaluation_notices"] = []
-    for key in (
-        "widget_cotes_text",
-        "widget_extra_text",
-        "widget_confirm_markets",
-    ):
-        S.pop(key, None)
-    S["last_saved_signature"] = None
+    if value in ("excellent", "extrême", "extreme"):
+        return "Excellent"
+    if value in ("bon", "bonne", "élevé", "eleve", "high"):
+        return "Bon"
+    if value in ("moyen", "medium"):
+        return "Moyen"
+    return "Faible"
 
 
 def generate_match_options(match, sport, user_info_text):
@@ -1406,35 +1146,35 @@ Match : {json.dumps(match, ensure_ascii=False)}
 Sport : {sport}
 Informations de ce match : {user_info_text}
 
-Examine jusqu'à 6 propositions distinctes et défendables, puis retiens
-2 à 3 scénarios les mieux étayés. Vise systématiquement 3 propositions
-quand au moins 3 marchés sont évaluables à partir des informations
-fournies. Varie les marchés selon les données disponibles, pas selon un
-trio imposé.
+Tu es l’analyste final de l’application. Ta mission est d’analyser
+minutieusement toutes les informations fournies et d’identifier les
+scénarios les plus fiables du match.
 
-Règles obligatoires :
-- Ne propose un scénario que s'il est fondé sur les informations fournies.
-- Ne transforme pas un manque de données en probabilité de zéro : exclue
-simplement le scénario s'il n'est pas évaluable.
-- Retiens 3 propositions dès que 3 marchés sont évaluables ; sinon,
-retiens le nombre maximum de scénarios réellement défendables.
-- Pour chaque scénario retenu, attribue un niveau de confiance :
-"élevé", "moyen" ou "faible".
-- Confiance élevée : plusieurs données concordantes et peu d'incertitudes.
-- Confiance moyenne : éléments favorables présents, mais incertitudes
-importantes.
-- Confiance faible : données insuffisantes, contradictions ou dépendance
-à des éléments non confirmés.
-- Le niveau de confiance n'est pas une probabilité calibrée et ne doit
+Consignes :
+- Analyse l’ensemble du texte fourni : contexte, enjeu, forme,
+domicile/extérieur, confrontations directes, statistiques, joueurs
+disponibles, absences, conditions et marchés contextuels.
+- Identifie entre 3 et 5 scénarios distincts et défendables.
+- Explore tous les types de marchés pertinents : vainqueur, double
+chance, total, handicap, les deux équipes marquent, statistiques
+individuelles, ou tout autre marché justifié par les données.
+- Ne te limite pas aux scénarios évidents : cherche le scénario le
+plus fiable, même s’il s’agit d’un total, d’un handicap ou d’un
+marché secondaire.
+- Chaque scénario doit être fondé uniquement sur les informations
+fournies. N’invente aucun fait, joueur, statistique ou disponibilité.
+- Un joueur cité comme absent ne doit jamais apparaître dans un
+scénario.
+- Si un marché est ambigu ou non évaluable, ne le propose pas.
+
+Pour chaque scénario, attribue un niveau de confiance :
+- "Excellent" : convergence forte des données, peu d’incertitudes ;
+- "Bon" : plusieurs données concordantes ;
+- "Moyen" : éléments favorables mais incertitudes importantes ;
+- "Faible" : données insuffisantes ou contradictions.
+
+Le niveau de confiance n’est pas une probabilité calibrée et ne doit
 jamais être présenté comme un pourcentage de réussite.
-- Si un scénario concerne un joueur, vérifie qu'il est bien disponible
-dans les informations fournies. N'utilise jamais un joueur listé comme
-absent.
-- Si un marché est ambigu, imprécis ou non vérifiable, ne le propose pas.
-- Pour tout marché de total (buts, points, jeux, cartons, corners),
-précise obligatoirement la ligne numérique exacte et le sens :
-par exemple "Total buts 2.5 — Over" ou "Total buts 2.5 — Under".
-Un total sans ligne numérique ou sans sens doit être exclu.
 
 Réponds uniquement en JSON valide :
 {{
@@ -1443,74 +1183,81 @@ Réponds uniquement en JSON valide :
     {{
       "marche": "intitulé du marché",
       "resultat": "résultat exact visé",
-      "probabilite": 0.0,
-      "niveau_confiance": "élevé, moyen ou faible",
+      "ligne": "ligne numérique si pertinente, sinon chaîne vide",
       "periode": "match entier",
-      "prolongations": "à vérifier",
-      "justification": "explication fondée uniquement sur les
-informations fournies",
-      "joueur": "",
-      "statistique": "",
-      "appuis_joueur": []
+      "niveau_confiance": "Excellent, Bon, Moyen ou Faible",
+      "probabilite": 0.0,
+      "justification": "explication courte fondée sur les informations"
     }}
-  ],
-  "complement_demande": "complément précis si nécessaire, sinon chaîne
-vide"
+  ]
 }}
 
-La probabilité doit être un nombre décimal entre 0 et 1 pour les
-propositions évaluables. N'utilise jamais null pour une proposition
-retenue.
+La probabilité est facultative : utilise une estimation entre 0 et 1
+uniquement lorsque tu peux la défendre. Le niveau de confiance reste
+le critère principal.
 """
-    pool, diagnostics, synthesis, complement = {}, [], "", ""
-    feedback = ""
+
+    pool = {}
+    diagnostics = []
+    synthesis = ""
 
     for attempt in range(2):
         try:
-            parsed = generate_json(prompt + feedback)
+            parsed = generate_json(prompt)
             synthesis = synthesis or fix_elisions(
                 parsed.get("synthese", "")
             )
-            complement = str(
-                parsed.get("complement_demande")
-                or complement
-            )
 
-            for raw in collect_candidates(parsed):
-                try:
-                    option = validate_option(
-                        raw,
-                        match,
-                        user_info_text,
+            candidats = parsed.get("candidats", [])
+            if not isinstance(candidats, list):
+                candidats = []
+
+            for raw in candidats:
+                if not isinstance(raw, dict):
+                    continue
+
+                marche = str(raw.get("marche", "")).strip()
+                resultat = str(raw.get("resultat", "")).strip()
+
+                if not marche or not resultat:
+                    diagnostics.append(
+                        "Scénario incomplet ignoré."
                     )
-                    key = market_key(option)[1:]
-                    if (
-                        key not in pool
-                        or option["probabilite"]
-                        > pool[key]["probabilite"]
-                    ):
-                        pool[key] = option
-                except ValueError as error:
-                    diagnostics.append(str(error))
+                    continue
+
+                confidence = normalize_confidence(
+                    raw.get("niveau_confiance", "")
+                )
+
+                option = {
+                    "marche": fix_elisions(marche),
+                    "resultat": fix_elisions(resultat),
+                    "ligne": str(raw.get("ligne", "") or "").strip(),
+                    "periode": str(
+                        raw.get("periode", "match entier")
+                    ).strip(),
+                    "niveau_confiance": confidence,
+                    "probabilite": normalize_probability(
+                        raw.get("probabilite", 0)
+                    ),
+                    "justification": fix_elisions(
+                        str(raw.get("justification", ""))
+                    ),
+                }
+
+                key = (
+                    option["marche"].lower()
+                    + "|"
+                    + option["resultat"].lower()
+                    + "|"
+                    + option["ligne"].lower()
+                )
+
+                if key not in pool:
+                    pool[key] = option
 
             if len(pool) >= 3:
                 break
-
-            feedback = (
-                
-                "Il reste des propositions à préciser. Fournis "
-                "uniquement des alternatives distinctes, fondées sur "
-                "le texte, sans inventer de faits. Déjà retenues : "
-                + json.dumps(
-                    list(pool.values()),
-                    ensure_ascii=False,
-                )
-                + "; points à corriger : "
-                + json.dumps(
-                    diagnostics[-6:],
-                    ensure_ascii=False,
-                )
-            )
 
         except Exception as error:
             diagnostics.append(
@@ -1518,33 +1265,25 @@ retenue.
                 + str(error)[:250]
             )
 
-    confidence_rank = {
-        "élevé": 2,
-        "moyen": 1,
-        "faible": 0,
-    }
-
     selected = sorted(
         pool.values(),
         key=lambda option: (
-            option["probabilite"],
-            confidence_rank.get(
-                option.get("niveau_confiance", "faible"),
+            CONFIDENCE_RANK.get(
+                option.get("niveau_confiance", "Faible"),
                 0,
             ),
+            option.get("probabilite", 0),
         ),
         reverse=True,
-    )[:3]
+    )[:5]
 
     result = {
         "synthese": synthesis,
         "_error": "",
-        "_market_version": MARKET_FORMAT_VERSION,
         "_diagnostics": list(dict.fromkeys(diagnostics)),
-        "_complement": complement,
     }
 
-    for letter, option in zip(("A", "B", "C"), selected):
+    for letter, option in zip(("A", "B", "C", "D", "E"), selected):
         result[letter] = option
 
     return result
@@ -1553,116 +1292,61 @@ retenue.
 def evaluate_extra_market(match, name, user_info_text):
     prompt = f"""
 {ANTI_HALLUCINATION_RULE}
-{SIMPLE_MARKET_RULES}
 
 Match : {json.dumps(match, ensure_ascii=False)}
-Informations : {user_info_text}
-Marché EXTRA exact demandé : {name}
+Informations de ce match : {user_info_text}
 
-Réponds avec une seule proposition JSON, pas une liste.
-Évalue CE marché uniquement. Ne modifie ni la ligne, ni l'équipe, ni la
-période. Ne complète pas une ligne ou un joueur manquant.
-Si nécessaire, renvoie :
-{{"probabilite":null,"raison":"précision exacte nécessaire"}}
+Marché EXTRA à évaluer : {name}
 
-La règle d'égalité n'est pas un champ obligatoire de cette évaluation.
-Le marché joueur doit être appuyé par les performances du joueur dans les
-informations.
+Analyse ce marché à partir des informations fournies.
+Détermine le niveau de confiance du scénario.
+
+Niveaux possibles :
+- "Excellent" : convergence forte des données, peu d’incertitudes ;
+- "Bon" : plusieurs données concordantes ;
+- "Moyen" : éléments favorables mais incertitudes importantes ;
+- "Faible" : données insuffisantes ou contradictions.
+
+N’invente aucun fait, joueur, statistique ou disponibilité.
+Le niveau de confiance n’est pas une probabilité calibrée.
+
+Réponds uniquement en JSON valide :
+{{
+  "niveau_confiance": "Excellent, Bon, Moyen ou Faible",
+  "probabilite": 0.0,
+  "justification": "explication courte fondée sur les informations"
+}}
 """
-    raw = generate_json(prompt)
+
     try:
-        option = validate_option(
-            raw, match, user_info_text
-        )
-        source = name.replace("_", " ").casefold()
+        parsed = generate_json(prompt)
 
-        if (
-            option.get("joueur")
-            and option["joueur"].casefold()
-            not in source
-        ):
-            raise ValueError(
-                "Joueur différent de celui de l'EXTRA."
-            )
-
-        extract = lambda text: [
-            float(x.replace(",", "."))
-            for x in re.findall(
-                r"[+-]?d+(?:[.,]d+)?", text
-            )
-        ]
-
-        if any(
-            n not in extract(source)
-            for n in extract(option["resultat"])
-        ):
-            raise ValueError(
-                "Le résultat évalué ajoute ou modifie une valeur "
-                "numérique de l'EXTRA."
-            )
-
-        return option
-    except ValueError as error:
         return {
-            "probabilite": None,
-            "_validation_error": str(error),
-            "raison": str(error),
+            "niveau_confiance": normalize_confidence(
+                parsed.get("niveau_confiance", "")
+            ),
+            "probabilite": normalize_probability(
+                parsed.get("probabilite", 0)
+            ),
+            "justification": fix_elisions(
+                str(parsed.get("justification", ""))
+            ),
         }
 
-
-def generate_final_justification(result):
-    fallback = (
-        "Les sélections retenues respectent le seuil individuel "
-        "d'estimation demandé. Le coupon recherche un compromis entre "
-        "la proximité de la cote cible et la probabilité combinée "
-        "estimée. Ces estimations ne constituent pas une garantie de "
-        "réussite."
-    )
-
-    description = [
-        {
-            "match": (
-                f"{item.get('home')} contre "
-                f"{item.get('away')}"
+    except Exception as error:
+        return {
+            "niveau_confiance": "Faible",
+            "probabilite": 0.0,
+            "justification": (
+                "Évaluation indisponible : "
+                + str(error)[:200]
             ),
-            "marche": item.get("chosen_marche"),
-            "resultat": item.get("chosen_resultat"),
-            "periode": item.get("chosen_periode"),
-            "prolongations": item.get(
-                "chosen_prolongations"
-            ),
-            "cote": item.get("chosen_cote"),
-            "probabilite": item.get("chosen_prob"),
         }
-        for item in result["combo"]
-    ]
+    
 
-    prompt = f"""
-{ANTI_HALLUCINATION_RULE}
 
-Sélections :
-{json.dumps(description, ensure_ascii=False)}
 
-Cote cible : {S['cote_cible']}
-Cote obtenue : {result['total_odds']}
-Probabilité combinée estimée sous indépendance :
-{result['combined_probability']}
-Dans la marge cible : {result['within_tolerance']}
 
-Rédige 3 à 4 phrases en texte brut, sans Markdown ni JSON.
-Explique le compromis sans inventer de faits sportifs.
-Signale si la cible n'est pas atteinte dans la marge.
-Ne qualifie pas le coupon de sûr ou garanti.
-Rappelle la limite de l'hypothèse d'indépendance.
-"""
-    try:
-        response = configure_gemini().generate_content(
-            prompt
-        )
-        text = clean_justification_text(response.text)
-        return text or fallback
-    except Exception:
-        return fallback
 
 
 # ============================================================
