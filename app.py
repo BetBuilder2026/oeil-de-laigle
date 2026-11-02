@@ -1348,239 +1348,377 @@ Réponds uniquement en JSON valide :
 # RECHERCHE DU COUPON
 # ============================================================
 
-def search_coupon(
-    candidate_groups, target, max_size, tolerance
-):
-    target_log = math.log(target)
-    lower = target * (1.0 - tolerance)
-    upper = target * (1.0 + tolerance)
+def parse_option_key(key):
+    if not isinstance(key, str) or "|" not in key:
+        return None, None
 
-    states = [(0.0, 0.0, tuple())]
+    mid, letter = key.split("|", 1)
+    return mid.strip().upper(), letter.strip().upper()
 
-    for group in candidate_groups:
-        expanded = list(states)
-        for log_odds, log_prob, combo in states:
-            if max_size and len(combo) >= max_size:
-                continue
-            for candidate in group:
-                expanded.append((
-                    log_odds
-                    + math.log(candidate["chosen_cote"]),
-                    log_prob
-                    + math.log(
-                        candidate["chosen_prob"]
-                    ),
-                    combo + (candidate,),
-                ))
 
-        if len(expanded) > SEARCH_BEAM_WIDTH:
-            buckets = {}
-            for state in expanded:
-                key = (
-                    len(state[2]),
-                    round(state[0] * 180),
-                )
-                buckets.setdefault(key, []).append(state)
+def option_label(letter):
+    return f"Option {letter}"
 
-            reduced = []
-            for items in buckets.values():
-                items.sort(
-                    key=lambda item: item[1],
-                    reverse=True,
-                )
-                reduced.extend(items[:3])
 
-            def partial_rank(state):
-                log_odds, log_prob, combo = state
-                if not combo:
-                    return (0, 0.0, 0.0)
-                if log_odds <= math.log(upper):
-                    return (
-                        0,
-                        -log_prob,
-                        abs(log_odds - target_log),
-                    )
-                return (
-                    1,
-                    log_odds - target_log,
-                    -log_prob,
-                )
+def option_display(option):
+    if not isinstance(option, dict):
+        return ""
 
-            reduced.sort(key=partial_rank)
-            states = reduced[:SEARCH_BEAM_WIDTH]
-        else:
-            states = expanded
-
-    nonempty = [
-        state for state in states if state[2]
-    ]
-    if not nonempty:
-        return None
-
-    within = [
-        state for state in nonempty
-        if lower <= math.exp(state[0]) <= upper
+    parts = [
+        option.get("marche", ""),
+        option.get("resultat", ""),
     ]
 
-    if within:
-        best = max(
-            within,
-            key=lambda state: (
-                state[1],
-                -abs(math.exp(state[0]) - target),
-            ),
-        )
-    else:
-        best = min(
-            nonempty,
-            key=lambda state: (
-                abs(math.exp(state[0]) - target),
-                -state[1],
-            ),
-        )
+    if option.get("ligne"):
+        parts.append(str(option["ligne"]))
 
-    total = math.exp(best[0])
-    return {
-        "combo": list(best[2]),
-        "total_odds": total,
-        "combined_probability": math.exp(best[1]),
-        "diff": abs(total - target),
-        "within_tolerance": lower <= total <= upper,
-        "tolerance": tolerance,
-        "search_method": (
-            "Recherche bornée par faisceau"
-        ),
-    }
+    return " — ".join(part for part in parts if part)
 
 
-def build_final_result(cotes, extras):
-    threshold = validity_rate(S["cote_cible"])
-    information = extract_info_by_mid(
-        S["data_info_text"]
+def confidence_sort_key(option):
+    return CONFIDENCE_RANK.get(
+        option.get("niveau_confiance", "Faible"),
+        0,
     )
-    groups, all_evaluated, notices = [], [], []
 
-    for match in S["relevant_matches"]:
-        mid = match["mid"]
-        candidates = []
 
-        def candidate(option, odds, letter):
-            return {
-                **match,
-                "letter": letter,
-                "chosen_marche": option["marche"],
-                "chosen_resultat": option["resultat"],
-                "chosen_periode": option["periode"],
-                "chosen_prolongations": option[
-                    "prolongations"
-                ],
-                "chosen_prob": option["probabilite"],
-                "chosen_confiance": option.get(
-                    "niveau_confiance", "faible"
-                ),
-                "chosen_cote": odds,
+def candidate_sort_key(candidate):
+    return (
+        confidence_sort_key(candidate.get("option", {})),
+        candidate.get("option", {}).get("probabilite", 0),
+        candidate.get("cote", 0),
+    )
+
+
+def build_options_pool(mid, options_result):
+    pool = []
+
+    if not isinstance(options_result, dict):
+        return pool
+
+    for letter in ("A", "B", "C", "D", "E"):
+        option = options_result.get(letter)
+
+        if not isinstance(option, dict):
+            continue
+
+        if not option.get("marche") or not option.get("resultat"):
+            continue
+
+        pool.append(
+            {
+                "mid": mid,
+                "lettre": letter,
+                "option": option,
+                "source": "principal",
             }
+        )
 
-        for letter, odds in cotes.get(mid, {}).items():
-            try:
-                option = validate_option(
-                    S["options_results"]
-                    .get(mid, {})
-                    .get(letter),
-                    match,
-                    information.get(mid, ""),
-                )
-                candidates.append(
-                    candidate(option, odds, letter)
-                )
-            except ValueError:
-                continue
+    return pool
 
-        for index, extra in enumerate(
-            extras.get(mid, []), 1
-        ):
-            cache_key = fingerprint({
-                "version": MARKET_FORMAT_VERSION,
-                "match": match,
-                "market": extra["marche"],
-                "info": information.get(mid, ""),
-            })
 
-            if cache_key not in S["extra_results"]:
-                try:
-                    S["extra_results"][cache_key] = (
-                        evaluate_extra_market(
-                            match,
-                            extra["marche"],
-                            information.get(mid, ""),
-                        )
-                    )
-                except Exception as error:
-                    notices.append(
-                        f"{mid} EXTRA {index} : évaluation "
-                        "interrompue ("
-                        + str(error)[:180]
-                        + "). Réessayez."
-                    )
-                    continue
+def collect_coupon_candidates(matches, options_results, extra_results):
+    candidates = []
 
-            option = S["extra_results"][cache_key]
-            if (
-                not isinstance(option, dict)
-                or option.get("_validation_error")
-            ):
-                reason = (
-                    option.get("raison", "Précision requise")
-                    if isinstance(option, dict)
-                    else "Réévaluation nécessaire"
-                )
-                notices.append(
-                    f"{mid} EXTRA {index} : {reason}"
-                )
+    for match in matches:
+        mid = match.get("mid")
+        options_result = options_results.get(mid, {})
+        candidates.extend(build_options_pool(mid, options_result))
+
+        for extra in extra_results.get(mid, []):
+            if not extra.get("description"):
                 continue
 
             candidates.append(
-                candidate(
-                    option,
-                    extra["cote"],
-                    f"EXTRA {index}",
-                )
+                {
+                    "mid": mid,
+                    "lettre": "EXTRA",
+                    "option": {
+                        "marche": extra.get("description", ""),
+                        "resultat": "",
+                        "ligne": "",
+                        "periode": "match entier",
+                        "niveau_confiance": extra.get(
+                            "niveau_confiance",
+                            "Faible",
+                        ),
+                        "probabilite": extra.get("probabilite", 0),
+                        "justification": extra.get(
+                            "justification",
+                            "",
+                        ),
+                    },
+                    "cote": extra.get("cote"),
+                    "source": "extra",
+                }
             )
 
-        admissible = [
-            c for c in candidates
-            if c["chosen_prob"] >= threshold
-            and valid_odds(c["chosen_cote"])
-        ]
+    for candidate in candidates:
+        if candidate.get("source") == "extra":
+            continue
 
-        if admissible:
-            groups.append(admissible)
+        letter = candidate.get("lettre")
+        cotes = S.get("data_cotes_parsed", {}).get(
+            candidate.get("mid"),
+            {},
+        )
+        candidate["cote"] = cotes.get(letter)
 
-        all_evaluated.append({
-            **match,
-            "status": (
-                "admissible"
-                if admissible
-                else "aucune option au seuil requis"
-            ),
-            "candidates": candidates,
-        })
+    return candidates
 
-    S["evaluation_notices"] = notices
-    result = search_coupon(
-        groups,
-        S["cote_cible"],
-        S["coupon_max_size"],
-        S["tolerance"],
+
+def coupon_valid(selections, cote_cible, tolerance):
+    if not selections:
+        return False
+
+    mids = [selection.get("mid") for selection in selections]
+
+    if len(mids) != len(set(mids)):
+        return False
+
+    min_odds = min_odds_for(len(selections))
+
+    for selection in selections:
+        odd = selection.get("cote")
+
+        if not valid_odds(odd) or float(odd) < min_odds:
+            return False
+
+    total = compute_final_odds(selections)
+    return abs(total - float(cote_cible)) <= float(tolerance)
+
+
+def compute_final_odds(selections):
+    total = 1.0
+
+    for selection in selections:
+        odd = selection.get("cote")
+
+        if valid_odds(odd):
+            total *= float(odd)
+
+    return round(total, 2)
+
+
+def select_options_for_coupon(
+    matches,
+    options_results,
+    extra_results,
+    cote_cible,
+    tolerance,
+):
+    candidates = collect_coupon_candidates(
+        matches,
+        options_results,
+        extra_results,
     )
 
-    if result:
-        result.update(
-            all_evaluated=all_evaluated,
-            threshold=threshold,
-            evaluation_notices=notices,
+    by_mid = {}
+
+    for candidate in candidates:
+        mid = candidate.get("mid")
+
+        if not mid:
+            continue
+
+        by_mid.setdefault(mid, []).append(candidate)
+
+    if not by_mid:
+        return None, "Aucune option exploitable."
+
+    best = None
+    best_key = None
+    reason = "Aucune combinaison ne respecte la cote cible."
+
+    mids = list(by_mid.keys())
+    pools = [
+        sorted(by_mid[mid], key=candidate_sort_key, reverse=True)
+        for mid in mids
+    ]
+
+    for pool in pools:
+        del pool[12:]
+
+    for combination in itertools.product(*pools):
+        selections = [
+            {
+                "mid": candidate["mid"],
+                "lettre": candidate["lettre"],
+                "option": candidate["option"],
+                "cote": candidate.get("cote"),
+                "source": candidate.get("source"),
+            }
+            for candidate in combination
+        ]
+
+        if not coupon_valid(selections, cote_cible, tolerance):
+            continue
+
+        confidence_total = sum(
+            confidence_sort_key(selection["option"])
+            for selection in selections
         )
-    return result
+
+        total = compute_final_odds(selections)
+        distance = abs(total - float(cote_cible))
+
+        key = (
+            confidence_total,
+            -distance,
+            total,
+        )
+
+        if best_key is None or key > best_key:
+            best = selections
+            best_key = key
+
+    if best:
+        reason = "Combinaison retenue automatiquement."
+
+    return best, reason
+
+
+def build_final_coupon(
+    matches,
+    options_results,
+    extra_results,
+    cote_cible,
+    tolerance,
+):
+    candidates = collect_coupon_candidates(
+        matches,
+        options_results,
+        extra_results,
+    )
+
+    if not candidates:
+        return None, "Aucune option exploitable.", []
+
+    usable = [
+        candidate
+        for candidate in candidates
+        if valid_odds(candidate.get("cote"))
+    ]
+
+    if not usable:
+        return None, "Aucune cote valide disponible.", []
+
+    prompt = f"""
+{ANTI_HALLUCINATION_RULE}
+{SIMPLE_MARKET_RULES}
+
+Tu dois construire un coupon sportif à partir des options déjà
+analysées par l’application. Tu ne dois jamais inventer une option,
+un match, une cote ou un résultat.
+
+Cote cible : {cote_cible}
+Marge acceptée : plus ou moins {tolerance}
+
+Règles impératives :
+- Utilise uniquement les options listées ci-dessous.
+- Chaque match peut apparaître au maximum une fois.
+- Chaque sélection doit avoir une cote supérieure ou égale à
+1.50 si le coupon contient une seule sélection, ou 1.47 s’il en
+contient plusieurs.
+- Le produit des cotes doit être compris entre
+{round(float(cote_cible) - float(tolerance), 2)}
+et
+{round(float(cote_cible) + float(tolerance), 2)}.
+- Ne choisis pas une sélection si sa cote est absente ou invalide.
+- Privilégie les niveaux de confiance les plus élevés.
+- Ne modifie jamais une cote.
+
+Options disponibles :
+{json.dumps(usable, ensure_ascii=False, default=str)}
+
+Réponds uniquement en JSON valide :
+{{
+  "synthese": "explication courte en français",
+  "selections": [
+    {{
+      "mid": "identifiant du match",
+      "lettre": "A, B, C, D, E ou EXTRA",
+      "justification": "raison courte du choix"
+    }}
+  ]
+}}
+"""
+
+    errors = []
+
+    for attempt in range(3):
+        try:
+            parsed = generate_json(prompt)
+            selections = parsed.get("selections", [])
+
+            if not isinstance(selections, list):
+                raise ValueError("Liste de sélections absente.")
+
+            resolved = []
+            lookup = {}
+
+            for candidate in usable:
+                lookup[
+                    (
+                        candidate.get("mid"),
+                        candidate.get("lettre"),
+                    )
+                ] = candidate
+
+            for raw in selections:
+                if not isinstance(raw, dict):
+                    continue
+
+                mid = str(raw.get("mid", "")).strip().upper()
+                letter = str(raw.get("lettre", "")).strip().upper()
+                candidate = lookup.get((mid, letter))
+
+                if not candidate:
+                    continue
+
+                resolved.append(
+                    {
+                        "mid": mid,
+                        "lettre": letter,
+                        "option": candidate["option"],
+                        "cote": candidate.get("cote"),
+                        "source": candidate.get("source"),
+                        "justification": fix_elisions(
+                            str(raw.get("justification", ""))
+                        ),
+                    }
+                )
+
+            if not coupon_valid(resolved, cote_cible, tolerance):
+                errors.append(
+                    f"Tentative {attempt + 1} : combinaison invalide."
+                )
+                continue
+
+            return (
+                resolved,
+                fix_elisions(str(parsed.get("synthese", ""))),
+                errors,
+            )
+
+        except Exception as error:
+            errors.append(
+                f"Tentative {attempt + 1} : {str(error)[:200]}"
+            )
+
+    fallback, reason = select_options_for_coupon(
+        matches,
+        options_results,
+        extra_results,
+        cote_cible,
+        tolerance,
+    )
+
+    if fallback:
+        return fallback, reason, errors
+
+    return None, reason, errors
+               
 # ============================================================
 # COOKIES ET AUTHENTIFICATION
 # ============================================================
