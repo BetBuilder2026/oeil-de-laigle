@@ -2668,16 +2668,16 @@ elif S["step"] == "info_request":
             for match in matches
         )
 
-    key = widget_value(
-        "info_text", S["data_info_text"]
-    )
+    key = widget_value("infotext", S["data_info_text"])
+
     st.text_area(
-        "📝 Rapports des matchs",
+        "Une section par match, commençant par M1, M2, etc.",
         height=320,
         key=key,
         on_change=capture_text,
         args=("data_info_text", key),
     )
+
     S["data_info_text"] = S[key]
 
     missing = missing_information(
@@ -2698,8 +2698,8 @@ elif S["step"] == "info_request":
         st.rerun()
 
     record_progress()
-    st.write("DEBUG 1 — début du texte :", repr(S.get("data_infotext", "")[:150]))
-    st.write("DEBUG 2 — sections détectées :", list(extract_info_by_mid(S.get("data_infotext", "")).keys()))
+    st.write("DEBUG 1 — début du texte :", repr(S.get("data_info_text", "")[:150]))
+    st.write("DEBUG 2 — sections détectées :", list(extract_info_by_mid(S.get("data_info_text", "")).keys()))
     st.write("DEBUG 3 — matchs attendus :", [m.get("mid") for m in matches])
     st.write("DEBUG 4 — sections manquantes :", missing)
 
