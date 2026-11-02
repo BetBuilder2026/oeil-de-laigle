@@ -2712,7 +2712,8 @@ elif S["step"] == "info_request":
     st.write("DEBUG 3 — matchs attendus :", [m.get("mid") for m in matches])
     st.write("DEBUG 4 — sections manquantes :", missing)
 
-
+    import inspect
+    st.code(inspect.getsource(extract_info_by_mid))
 # ============================================================
 # ÉTAPE 4 — OPTIONS ET COTES
 # ============================================================
