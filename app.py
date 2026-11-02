@@ -2091,8 +2091,8 @@ if S["step"] == "setup":
         unsafe_allow_html=True,
     )
     st.caption(
-        "Les probabilités de Gemini sont des estimations non calibrées. "
-        "Aucun coupon n'est garanti."
+        "Les niveaux de confiance sont des estimations d’analyse. "
+        "Aucun coupon n’est garanti."
     )
 
     initial_sport = (
@@ -2184,11 +2184,9 @@ if S["step"] == "setup":
     S["competition"] = competition
     S["cote_cible"] = float(target)
     S["is_auto_mode"] = automatic
-    S["threshold"] = validity_rate(target)
     S["tolerance"] = tolerance_pct / 100.0
 
     st.info(
-        f"Seuil individuel : {S['threshold']:.0%}. "
         f"Cote moyenne de préparation : "
         f"{AVERAGE_ODDS:.2f}. "
         f"Environ {estimated_selections(target)} "
@@ -2200,25 +2198,28 @@ if S["step"] == "setup":
             mode,
             max_size,
             days,
-            limit,
-            threshold,
+            pool_limit,
+            cap,
         ) = determine_mode_params(target)
+
         S["mode"] = mode
         S["coupon_max_size"] = max_size
         S["jours_fenetre"] = days
-        S["pool_limit"] = limit
+        S["pool_limit"] = pool_limit
 
         labels = {
             "simple_double": "Simple/Double",
             "combo_info": "Combo",
             "multi": "Multi",
         }
+
         st.info(
             f"Mode {labels[mode]} : recherche sur "
-            f"{days} jours, jusqu'à {limit} rencontres "
+            f"{days} jours, jusqu'à {pool_limit} rencontres "
             "à étudier. Des informations seront demandées "
             "pour chacune."
         )
+
         st.caption(
             "Les rencontres sont classées par date, pas "
             "sélectionnées à ce stade pour leur probabilité "
@@ -2242,7 +2243,7 @@ if S["step"] == "setup":
                             fetch_nba_matches(days)
                         )
                     pool = prepare_pool(
-                        matches, limit
+                        matches, pool_limit
                     )
                 except Exception as error:
                     pool = []
@@ -2291,10 +2292,15 @@ if S["step"] == "setup":
             "<span class='badge-manual'>⚠️ Mode manuel</span>",
             unsafe_allow_html=True,
         )
-        recommended = recommended_matches(
-            target,
+
+        recommended = min(
             MAX_MANUAL_GLOBAL,
+            max(
+                1,
+                estimated_selections(target) + 1,
+            ),
         )
+
         count_key = widget_value(
             "nb_matches", recommended
         )
@@ -2304,10 +2310,12 @@ if S["step"] == "setup":
             max_value=MAX_MANUAL_GLOBAL,
             key=count_key,
         )
+
         st.caption(
             f"Recommandation indicative : "
             f"{recommended} rencontres."
         )
+
         S["manual_nb_matches"] = count
 
         if st.button("➡️ Saisir les matchs"):
@@ -2319,6 +2327,7 @@ if S["step"] == "setup":
             S["data_info_text"] = ""
             S["data_cotes_text"] = ""
             S["data_extra_text"] = ""
+
             for key in list(S.keys()):
                 if key.startswith((
                     "widget_home_",
@@ -2326,6 +2335,7 @@ if S["step"] == "setup":
                     "widget_match_sport_",
                 )):
                     del S[key]
+
             for name in (
                 "info_text",
                 "cotes_text",
@@ -2337,7 +2347,7 @@ if S["step"] == "setup":
             record_progress()
             st.rerun()
 
-
+    
 # ============================================================
 # ÉTAPE 2 — SAISIE MANUELLE
 # ============================================================
