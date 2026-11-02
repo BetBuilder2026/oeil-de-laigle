@@ -2857,7 +2857,7 @@ elif S["step"] == "options_ready":
 
         other_options = options_list[1:]
 
-            if other_options:
+        if other_options:
                 with st.expander("🔍 Voir les autres options générées"):
                     for letter, option in other_options:
                         probability = normalize_probability(
