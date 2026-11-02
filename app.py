@@ -1500,8 +1500,8 @@ retenue.
                 break
 
             feedback = (
-                "
-Il reste des propositions à préciser. Fournis "
+                
+                "Il reste des propositions à préciser. Fournis "
                 "uniquement des alternatives distinctes, fondées sur "
                 "le texte, sans inventer de faits. Déjà retenues : "
                 + json.dumps(
