@@ -715,8 +715,7 @@ def split_info_blocks(text):
         blocks[current] = lines
 
     return {
-        mid: "
-".join(content).strip()
+        mid: chr(10).join(content).strip()
         for mid, content in blocks.items()
     }
 
@@ -734,9 +733,7 @@ def rebuild_info_text(blocks):
             parts.append(mid + ":")
             parts.append(content)
 
-    return "
-
-".join(parts)
+    return chr(10).join(parts)
 
 
 def compact_info_text(text):
@@ -1152,7 +1149,7 @@ def resume_analysis(entry):
         "Analyse restaurée. Les anciennes cotes et informations "
         "peuvent avoir changé : vérifiez-les avant de recalculer."
     )
-    
+
 
 # ============================================================
 # API SPORTIVES
