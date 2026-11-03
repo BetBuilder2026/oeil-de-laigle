@@ -2681,18 +2681,17 @@ elif S["step"] == "manual_entry":
     record_progress()
 
 
-# =====================================================================
-# SECTION : ÉTAPE 3 — INFORMATIONS COMPLÉMENTAIRES
-# =====================================================================
-
+# ============================================================
+# ÉTAPE 3 — INFORMATIONS COMPLÉMENTAIRES
+# ============================================================
 
 elif S["step"] == "info_request":
     st.markdown("## 🔍 Informations complémentaires")
 
     st.write(
         "Collez ici le rapport préparé pour chaque rencontre. "
-        "Chaque match dispose de sa propre zone de saisie. "
-        "Les informations ne sont pas vérifiées automatiquement."
+        "Chaque match dispose de sa propre zone de saisie et "
+        "d’une limite de caractères calculée automatiquement."
     )
 
     if st.button("⬅️ Retour au paramétrage"):
@@ -2705,8 +2704,27 @@ elif S["step"] == "info_request":
         st.error("Aucun match à analyser. Relancez le paramétrage.")
         st.stop()
 
+    nombre_matchs = len(matches)
+
+    if nombre_matchs == 0:
+        st.error("Aucun match sélectionné.")
+        st.stop()
+
+    LIMITE_TOTALE = 24000
+
+    limite_par_match = LIMITE_TOTALE // nombre_matchs
+
+    st.info(
+        f"Limite totale disponible : {LIMITE_TOTALE} caractères. "
+        f"Pour {nombre_matchs} match(s), la limite conseillée est "
+        f"de {limite_par_match} caractères par match."
+    )
+
     if "data_info_texts" not in S or not isinstance(S["data_info_texts"], dict):
         S["data_info_texts"] = {}
+
+    depassements = []
+    zones_vides = []
 
     for match in matches:
         mid = match["mid"]
@@ -2731,6 +2749,31 @@ elif S["step"] == "info_request":
 
         S["data_info_texts"][mid] = info_value
 
+        nombre_caracteres = len(info_value.strip())
+        caracteres_restants = limite_par_match - nombre_caracteres
+
+        if nombre_caracteres == 0:
+            zones_vides.append(mid)
+
+        if nombre_caracteres > limite_par_match:
+            depassements.append(
+                f"{mid} : {nombre_caracteres} caractères "
+                f"au lieu de {limite_par_match}"
+            )
+
+        if caracteres_restants >= 0:
+            st.caption(
+                f"Caractères utilisés : {nombre_caracteres} / "
+                f"{limite_par_match}. "
+                f"Il reste {caracteres_restants} caractères."
+            )
+        else:
+            st.error(
+                f"Limite dépassée pour {mid} : "
+                f"{nombre_caracteres} / {limite_par_match} caractères. "
+                f"Il faut retirer {abs(caracteres_restants)} caractères."
+            )
+
         st.markdown("---")
 
     info_parts = []
@@ -2743,22 +2786,44 @@ elif S["step"] == "info_request":
     separateur = chr(10) + chr(10)
     S["data_info_text"] = separateur.join(info_parts)
 
-    missing = missing_information(S["data_info_text"], matches)
+    total_caracteres = len(S["data_info_text"])
 
-    if missing:
-        st.warning(
-            "Informations manquantes ou vides : "
-            + ", ".join(missing)
+    st.caption(
+        f"Total des informations saisies : "
+        f"{total_caracteres} / {LIMITE_TOTALE} caractères."
+    )
+
+    if total_caracteres > LIMITE_TOTALE:
+        depassements.append(
+            f"Total général : {total_caracteres} caractères "
+            f"au lieu de {LIMITE_TOTALE}"
         )
 
-    if st.button("➡️ Générer les options", disabled=bool(missing)):
+    if zones_vides:
+        st.warning(
+            "Informations manquantes ou vides : "
+            + ", ".join(zones_vides)
+        )
+
+    if depassements:
+        st.warning(
+            "Limites de caractères dépassées : "
+            + " | ".join(depassements)
+        )
+
+    bouton_desactive = bool(zones_vides) or bool(depassements)
+
+    if st.button(
+        "➡️ Générer les options",
+        disabled=bouton_desactive,
+    ):
         S["step"] = "options_ready"
         record_progress()
         st.rerun()
 
     record_progress()
 
-           
+        
 # ============================================================
 # ÉTAPE 4 — OPTIONS ET COTES
 # ============================================================
