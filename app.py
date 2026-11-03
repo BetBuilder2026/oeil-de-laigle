@@ -2823,6 +2823,13 @@ elif S["step"] == "info_request":
 
     record_progress()
 
+
+# ============================================================
+# AFFICHAGE DE L’ÉTAPE 4 — OPTIONS ET COTES
+# ============================================================
+elif S["step"] == "options_ready":
+    render_options_step()
+
         
 # ============================================================
 # ÉTAPE 4 — OPTIONS ET COTES
@@ -2935,7 +2942,7 @@ def run_options_analysis():
     S["options_results"] = options_results
     S["extra_results"] = extra_results
     S["options_error"] = " | ".join(errors)
-    S["stage"] = "options_ready"
+    S["step"] = "options_ready"
 
 
 def run_extra_analysis():
