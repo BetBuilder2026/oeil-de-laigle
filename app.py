@@ -2691,7 +2691,7 @@ elif S["step"] == "info_request":
     )
     st.write(
         "Collez ici le rapport préparé pour chaque rencontre. "
-        "Utilisez une section commençant par M1:, M2:, etc. "
+        "Chaque match dispose de sa propre zone de saisie. "
         "Les informations ne sont pas vérifiées automatiquement."
     )
 
@@ -2706,37 +2706,52 @@ elif S["step"] == "info_request":
         )
         st.stop()
 
+    # Initialisation du dictionnaire des informations par match
+    if "data_info_texts" not in S or not isinstance(
+        S["data_info_texts"], dict
+    ):
+        S["data_info_texts"] = {}
+
     for match in matches:
-        st.write(
-            f"{match['mid']} — {match['home']} contre "
-            f"{match['away']} | "
+        mid = match["mid"]
+
+        st.markdown(
+            f"### {mid} — {match['home']} contre {match['away']}"
+        )
+        st.caption(
             f"{match.get('competition', '')} | "
             f"{match.get('date', '')}"
         )
 
-    if not S["data_info_text"]:
-        S["data_info_text"] = (
-            chr(10) * 2
-        ).join(
-            f"{match['mid']}: "
-            for match in matches
+        field_key = f"infotext_{mid}"
+
+        current_value = S["data_info_texts"].get(mid, "")
+
+        info_value = st.text_area(
+            f"Informations complémentaires — {mid}",
+            value=current_value,
+            height=220,
+            key=field_key,
         )
 
-    key = widget_value("infotext", S["data_info_text"])
+        S["data_info_texts"][mid] = info_value
 
-    st.text_area(
-        "Une section par match, commençant par M1, M2, etc.",
-        height=320,
-        key=key,
-        on_change=capture_text,
-        args=("data_info_text", key),
+        st.markdown("---")
+
+    # Reconstruction du texte global, compatible avec la suite
+    S["data_info_text"] = "
+
+".join(
+        f"{match['mid']}:
+"
+        f"{S['data_info_texts'].get(match['mid'], '').strip()}"
+        for match in matches
     )
-
-    S["data_info_text"] = S[key]
 
     missing = missing_information(
         S["data_info_text"], matches
     )
+
     if missing:
         st.warning(
             "Informations manquantes ou vides : "
@@ -2752,6 +2767,7 @@ elif S["step"] == "info_request":
         st.rerun()
 
     record_progress()
+    
     
 # ============================================================
 # ÉTAPE 4 — OPTIONS ET COTES
