@@ -2682,13 +2682,12 @@ elif S["step"] == "manual_entry":
 
 
 # ============================================================
-# ÉTAPE 3 — INFORMATIONS
+# ÉTAPE 3 — INFORMATIONS COMPLÉMENTAIRES
 # ============================================================
 
 elif S["step"] == "info_request":
-    st.markdown(
-        "## 🔍 Informations complémentaires"
-    )
+    st.markdown("## 🔍 Informations complémentaires")
+
     st.write(
         "Collez ici le rapport préparé pour chaque rencontre. "
         "Chaque match dispose de sa propre zone de saisie. "
@@ -2700,16 +2699,12 @@ elif S["step"] == "info_request":
         st.rerun()
 
     matches = S["relevant_matches"]
+
     if not matches:
-        st.error(
-            "Aucun match à analyser. Relancez le paramétrage."
-        )
+        st.error("Aucun match à analyser. Relancez le paramétrage.")
         st.stop()
 
-    # Initialisation du dictionnaire des informations par match
-    if "data_info_texts" not in S or not isinstance(
-        S["data_info_texts"], dict
-    ):
+    if "data_info_texts" not in S or not isinstance(S["data_info_texts"], dict):
         S["data_info_texts"] = {}
 
     for match in matches:
@@ -2718,13 +2713,12 @@ elif S["step"] == "info_request":
         st.markdown(
             f"### {mid} — {match['home']} contre {match['away']}"
         )
+
         st.caption(
-            f"{match.get('competition', '')} | "
-            f"{match.get('date', '')}"
+            f"{match.get('competition', '')} | {match.get('date', '')}"
         )
 
         field_key = f"infotext_{mid}"
-
         current_value = S["data_info_texts"].get(mid, "")
 
         info_value = st.text_area(
@@ -2738,7 +2732,7 @@ elif S["step"] == "info_request":
 
         st.markdown("---")
 
-        info_parts = []
+    info_parts = []
 
     for match in matches:
         mid = match["mid"]
@@ -2749,9 +2743,7 @@ elif S["step"] == "info_request":
 
 ".join(info_parts)
 
-    missing = missing_information(
-        S["data_info_text"], matches
-    )
+    missing = missing_information(S["data_info_text"], matches)
 
     if missing:
         st.warning(
@@ -2759,15 +2751,13 @@ elif S["step"] == "info_request":
             + ", ".join(missing)
         )
 
-    if st.button(
-        "➡️ Générer les options",
-        disabled=bool(missing),
-    ):
+    if st.button("➡️ Générer les options", disabled=bool(missing)):
         S["step"] = "options_ready"
         record_progress()
         st.rerun()
 
     record_progress()
+    
     
     
 # ============================================================
