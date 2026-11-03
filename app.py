@@ -3130,7 +3130,7 @@ def render_options_step():
 # ============================================================
 # AFFICHAGE DE L’ÉTAPE 4 — OPTIONS ET COTES
 # ============================================================
-elif S["step"] == "options_ready":
+if S["step"] == "options_ready":
     render_options_step()
 
 
