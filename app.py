@@ -1530,6 +1530,7 @@ le critère principal.
         "_error": "",
         "_diagnostics": list(dict.fromkeys(diagnostics)),
     }
+    result["options"] = selected
 
     for letter, option in zip(("A", "B", "C", "D", "E"), selected):
         result[letter] = option
