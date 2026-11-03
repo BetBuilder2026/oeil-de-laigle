@@ -641,8 +641,17 @@ def clear_session_token(email):
 
 
 # ============================================================
-# SAUVEGARDE ET REPRISE
+# SAUVEGARDE
 # ============================================================
+
+SAVE_TEXT_LIMITS = {
+    "data_info_text": 12000,
+    "data_cotes_text": 4000,
+    "data_extra_text": 4000,
+}
+
+SAVE_PAYLOAD_LIMIT = 45000
+
 
 def snapshot_session_data():
     return {
@@ -654,6 +663,94 @@ def snapshot_session_data():
 
 def history_signature(data):
     return fingerprint(data)
+
+
+def truncate_text(value, limit):
+    value = str(value or "")
+
+    if len(value) <= limit:
+        return value
+
+    return value[:limit] + " … [texte tronqué pour la sauvegarde]"
+
+
+def compact_snapshot_for_save(info_limit=12000, justification_limit=600):
+    data = snapshot_session_data()
+
+    for key, default_limit in SAVE_TEXT_LIMITS.items():
+        limit = info_limit if key == "data_info_text" else default_limit
+        data[key] = truncate_text(data.get(key, ""), limit)
+
+    for result in data.get("options_results", {}).values():
+        if not isinstance(result, dict):
+            continue
+
+        result["synthese"] = truncate_text(
+            result.get("synthese", ""),
+            justification_limit,
+        )
+        result["_error"] = truncate_text(
+            result.get("_error", ""),
+            500,
+        )
+        result["_diagnostics"] = [
+            truncate_text(item, 300)
+            for item in result.get("_diagnostics", [])
+        ]
+
+        for option in result.values():
+            if isinstance(option, dict) and option.get(
+                "justification"
+            ):
+                option["justification"] = truncate_text(
+                    option["justification"],
+                    justification_limit,
+                )
+
+    for extras in data.get("extra_results", {}).values():
+        if not isinstance(extras, list):
+            continue
+
+        for extra in extras:
+            if isinstance(extra, dict):
+                extra["justification"] = truncate_text(
+                    extra.get("justification", ""),
+                    justification_limit,
+                )
+
+    data["final_justification"] = truncate_text(
+        data.get("final_justification", ""),
+        2000,
+    )
+
+    return data
+
+
+def build_save_payload():
+    attempts = [
+        (12000, 600),
+        (6000, 300),
+        (3000, 150),
+        (1500, 80),
+    ]
+
+    payload = ""
+    data = {}
+
+    for info_limit, justification_limit in attempts:
+        data = compact_snapshot_for_save(
+            info_limit,
+            justification_limit,
+        )
+        payload = json.dumps(data, ensure_ascii=False)
+
+        if len(payload) <= SAVE_PAYLOAD_LIMIT:
+            return payload
+
+    raise ValueError(
+        "L'analyse reste trop volumineuse pour Google Sheets "
+        "après réduction automatique des textes."
+    )
 
 
 def record_progress(stage=None, notify=False):
@@ -675,12 +772,7 @@ def record_progress(stage=None, notify=False):
         return True
 
     try:
-        payload = json.dumps(data, ensure_ascii=False)
-        if len(payload) > 45000:
-            raise ValueError(
-                "L'analyse est trop volumineuse pour une seule cellule "
-                "Google Sheets. Réduisez les textes complémentaires."
-            )
+        payload = build_save_payload()
 
         get_history_sheet().append_row(
             [
@@ -693,17 +785,23 @@ def record_progress(stage=None, notify=False):
             ],
             value_input_option="RAW",
         )
+
         S["last_saved_signature"] = signature
         S["history_error"] = ""
+
         if notify:
             st.success("Analyse sauvegardée.")
+
         return True
+
     except Exception as error:
         S["history_error"] = str(error)[:350]
+
         if notify:
             st.error(
                 "Sauvegarde impossible : " + S["history_error"]
             )
+
         return False
 
 
@@ -717,22 +815,28 @@ def get_history_entries(email):
     ):
         if len(row) < 6 or row[0].strip().lower() != normalized:
             continue
+
         try:
             data = json.loads(row[5]) if row[5] else {}
+
             if not isinstance(data, dict):
                 data = {}
+
         except (ValueError, TypeError):
             data = {}
 
-        entries.append({
-            "row_number": row_number,
-            "email": row[0],
-            "timestamp": row[1],
-            "stage": row[2],
-            "sport": row[3],
-            "cote_cible": row[4],
-            "session_data": data,
-        })
+        entries.append(
+            {
+                "row_number": row_number,
+                "email": row[0],
+                "timestamp": row[1],
+                "stage": row[2],
+                "sport": row[3],
+                "cote_cible": row[4],
+                "session_data": data,
+            }
+        )
+
     return entries
 
 
@@ -741,18 +845,24 @@ def parse_timestamp(value):
         dt = datetime.fromisoformat(
             str(value).replace("Z", "+00:00")
         )
+
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
+
         return dt.astimezone(timezone.utc)
+
     except (ValueError, TypeError):
         return datetime.min.replace(tzinfo=timezone.utc)
 
 
 def period_label(timestamp):
     dt = parse_timestamp(timestamp)
+
     if dt.year == 1:
         return "📁 Date inconnue"
+
     days = (utc_now().date() - dt.date()).days
+
     if days <= 0:
         return "🟢 Aujourd'hui"
     if days == 1:
@@ -761,11 +871,13 @@ def period_label(timestamp):
         return "🔵 Cette semaine"
     if days <= 30:
         return "🟣 Ce mois-ci"
+
     return "⚪ Plus ancien"
 
 
 def group_entries_by_analysis(entries):
     groups = {}
+
     for entry in entries:
         aid = (
             entry["session_data"].get("analysis_id")
@@ -774,6 +886,7 @@ def group_entries_by_analysis(entries):
         groups.setdefault(aid, []).append(entry)
 
     result = []
+
     for aid, rows in groups.items():
         rows.sort(
             key=lambda row: (
@@ -781,13 +894,17 @@ def group_entries_by_analysis(entries):
                 row["row_number"],
             )
         )
-        result.append({
-            "analysis_id": aid,
-            "latest": rows[-1],
-            "row_numbers": [
-                row["row_number"] for row in rows
-            ],
-        })
+
+        result.append(
+            {
+                "analysis_id": aid,
+                "latest": rows[-1],
+                "row_numbers": [
+                    row["row_number"] for row in rows
+                ],
+            }
+        )
+
     return sorted(
         result,
         key=lambda group: parse_timestamp(
@@ -803,20 +920,31 @@ def delete_history_rows(row_numbers):
         for entry in get_history_entries(S["user_email"])
     }
     requested = set(row_numbers)
+
     if not requested.issubset(owned):
         raise ValueError(
             "L'historique a changé. Actualisez avant de supprimer."
         )
+
     sheet = get_history_sheet()
+
     for row_number in sorted(requested, reverse=True):
         sheet.delete_rows(row_number)
 
 
 def infer_resume_step(data, old_stage):
-    if (data.get("final_result") or {}).get("combo"):
+    final_result = data.get("final_result")
+
+    if isinstance(final_result, dict) and final_result.get(
+        "combo"
+    ):
+        return "final"
+
+    if isinstance(final_result, list) and final_result:
         return "final"
 
     explicit = data.get("step")
+
     if explicit in STAGE_LABELS:
         return explicit
 
@@ -826,6 +954,7 @@ def infer_resume_step(data, old_stage):
     if data.get("matches_pool"):
         if old_stage == "info_request":
             return "options_ready"
+
         return "info_request"
 
     if old_stage == "manual_entry" or data.get("manual_draft"):
@@ -844,14 +973,23 @@ def resume_analysis(entry):
         )
 
     data = entry["session_data"]
+
     if not data:
         raise ValueError(
             "La sauvegarde ne contient pas de données lisibles."
         )
 
     safe_data = copy.deepcopy(data)
+
     if not isinstance(safe_data.get("final_result"), dict):
-        safe_data["final_result"] = {}
+        safe_data["final_result"] = (
+            safe_data.get("final_result")
+            if isinstance(
+                safe_data.get("final_result"),
+                list,
+            )
+            else {}
+        )
 
     step = infer_resume_step(safe_data, entry["stage"])
     reset_analysis()
@@ -877,7 +1015,6 @@ def resume_analysis(entry):
         data.get("sport") or entry["sport"] or "Football"
     )
     S["data_sport"] = S["sport"]
-    S["threshold"] = validity_rate(S["cote_cible"])
     S["is_auto_mode"] = (
         S["sport"] == "Football"
         or (
@@ -891,6 +1028,7 @@ def resume_analysis(entry):
 
     if pool and not S.get("relevant_matches"):
         S["relevant_matches"] = copy.deepcopy(pool)
+
         if step != "final":
             step = "info_request"
 
