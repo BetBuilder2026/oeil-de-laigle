@@ -2681,9 +2681,10 @@ elif S["step"] == "manual_entry":
     record_progress()
 
 
-# ============================================================
-# ÉTAPE 3 — INFORMATIONS COMPLÉMENTAIRES
-# ============================================================
+# =====================================================================
+# SECTION : ÉTAPE 3 — INFORMATIONS COMPLÉMENTAIRES
+# =====================================================================
+
 
 elif S["step"] == "info_request":
     st.markdown("## 🔍 Informations complémentaires")
@@ -2739,9 +2740,8 @@ elif S["step"] == "info_request":
         info = S["data_info_texts"].get(mid, "").strip()
         info_parts.append(mid + ": " + info)
 
-    S["data_info_text"] = "
-
-".join(info_parts)
+    separateur = chr(10) + chr(10)
+    S["data_info_text"] = separateur.join(info_parts)
 
     missing = missing_information(S["data_info_text"], matches)
 
@@ -2757,9 +2757,8 @@ elif S["step"] == "info_request":
         st.rerun()
 
     record_progress()
-    
-    
-    
+
+           
 # ============================================================
 # ÉTAPE 4 — OPTIONS ET COTES
 # ============================================================
