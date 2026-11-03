@@ -644,13 +644,15 @@ def clear_session_token(email):
 # SAUVEGARDE
 # ============================================================
 
-SAVE_TEXT_LIMITS = {
-    "data_info_text": 12000,
-    "data_cotes_text": 4000,
-    "data_extra_text": 4000,
-}
-
 SAVE_PAYLOAD_LIMIT = 45000
+
+INFO_TOTAL_BUDGET = 24000
+
+COTES_TEXT_LIMIT = 4000
+EXTRA_TEXT_LIMIT = 4000
+
+JUSTIFICATION_LIMIT = 200
+SYNTHESIS_LIMIT = 300
 
 
 def snapshot_session_data():
@@ -674,12 +676,102 @@ def truncate_text(value, limit):
     return value[:limit] + " … [texte tronqué pour la sauvegarde]"
 
 
-def compact_snapshot_for_save(info_limit=12000, justification_limit=600):
+def split_info_blocks(text):
+    blocks = {}
+    current = None
+    lines = []
+
+    for line in str(text or "").splitlines():
+        match = re.match(
+            "^[ ]*[Mm]([0-9]+)[ ]*:[ ]*$",
+            line,
+        )
+
+        if match:
+            if current:
+                blocks[current] = lines
+
+            current = "M" + match.group(1)
+            lines = []
+            continue
+
+        match_inline = re.match(
+            "^[ ]*[Mm]([0-9]+)[ ]*:[ ]*(.+)$",
+            line,
+        )
+
+        if match_inline:
+            if current:
+                blocks[current] = lines
+
+            current = "M" + match_inline.group(1)
+            lines = [match_inline.group(2)]
+            continue
+
+        if current:
+            lines.append(line)
+
+    if current:
+        blocks[current] = lines
+
+    return {
+        mid: "
+".join(content).strip()
+        for mid, content in blocks.items()
+    }
+
+
+def rebuild_info_text(blocks):
+    parts = []
+
+    for mid in sorted(
+        blocks,
+        key=lambda value: int(value[1:]),
+    ):
+        content = blocks[mid].strip()
+
+        if content:
+            parts.append(mid + ":")
+            parts.append(content)
+
+    return "
+
+".join(parts)
+
+
+def compact_info_text(text):
+    blocks = split_info_blocks(text)
+
+    if not blocks:
+        return truncate_text(text, INFO_TOTAL_BUDGET)
+
+    per_match = max(
+        1,
+        INFO_TOTAL_BUDGET // len(blocks),
+    )
+
+    compacted = {
+        mid: truncate_text(content, per_match)
+        for mid, content in blocks.items()
+    }
+
+    return rebuild_info_text(compacted)
+
+
+def compact_snapshot_for_save():
     data = snapshot_session_data()
 
-    for key, default_limit in SAVE_TEXT_LIMITS.items():
-        limit = info_limit if key == "data_info_text" else default_limit
-        data[key] = truncate_text(data.get(key, ""), limit)
+    data["data_info_text"] = compact_info_text(
+        data.get("data_info_text", "")
+    )
+    data["data_cotes_text"] = truncate_text(
+        data.get("data_cotes_text", ""),
+        COTES_TEXT_LIMIT,
+    )
+    data["data_extra_text"] = truncate_text(
+        data.get("data_extra_text", ""),
+        EXTRA_TEXT_LIMIT,
+    )
 
     for result in data.get("options_results", {}).values():
         if not isinstance(result, dict):
@@ -687,16 +779,13 @@ def compact_snapshot_for_save(info_limit=12000, justification_limit=600):
 
         result["synthese"] = truncate_text(
             result.get("synthese", ""),
-            justification_limit,
+            SYNTHESIS_LIMIT,
         )
         result["_error"] = truncate_text(
             result.get("_error", ""),
-            500,
+            300,
         )
-        result["_diagnostics"] = [
-            truncate_text(item, 300)
-            for item in result.get("_diagnostics", [])
-        ]
+        result["_diagnostics"] = []
 
         for option in result.values():
             if isinstance(option, dict) and option.get(
@@ -704,7 +793,7 @@ def compact_snapshot_for_save(info_limit=12000, justification_limit=600):
             ):
                 option["justification"] = truncate_text(
                     option["justification"],
-                    justification_limit,
+                    JUSTIFICATION_LIMIT,
                 )
 
     for extras in data.get("extra_results", {}).values():
@@ -715,37 +804,41 @@ def compact_snapshot_for_save(info_limit=12000, justification_limit=600):
             if isinstance(extra, dict):
                 extra["justification"] = truncate_text(
                     extra.get("justification", ""),
-                    justification_limit,
+                    JUSTIFICATION_LIMIT,
                 )
 
     data["final_justification"] = truncate_text(
         data.get("final_justification", ""),
-        2000,
+        1500,
     )
 
     return data
 
 
 def build_save_payload():
-    attempts = [
-        (12000, 600),
-        (6000, 300),
-        (3000, 150),
-        (1500, 80),
-    ]
+    data = compact_snapshot_for_save()
+    payload = json.dumps(data, ensure_ascii=False)
 
-    payload = ""
-    data = {}
+    if len(payload) <= SAVE_PAYLOAD_LIMIT:
+        return payload
 
-    for info_limit, justification_limit in attempts:
-        data = compact_snapshot_for_save(
-            info_limit,
-            justification_limit,
-        )
-        payload = json.dumps(data, ensure_ascii=False)
+    data["data_info_text"] = truncate_text(
+        data.get("data_info_text", ""),
+        12000,
+    )
+    payload = json.dumps(data, ensure_ascii=False)
 
-        if len(payload) <= SAVE_PAYLOAD_LIMIT:
-            return payload
+    if len(payload) <= SAVE_PAYLOAD_LIMIT:
+        return payload
+
+    data["data_info_text"] = truncate_text(
+        data.get("data_info_text", ""),
+        6000,
+    )
+    payload = json.dumps(data, ensure_ascii=False)
+
+    if len(payload) <= SAVE_PAYLOAD_LIMIT:
+        return payload
 
     raise ValueError(
         "L'analyse reste trop volumineuse pour Google Sheets "
@@ -1059,7 +1152,7 @@ def resume_analysis(entry):
         "Analyse restaurée. Les anciennes cotes et informations "
         "peuvent avoir changé : vérifiez-les avant de recalculer."
     )
-
+    
 
 # ============================================================
 # API SPORTIVES
