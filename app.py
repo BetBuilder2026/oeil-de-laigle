@@ -1386,9 +1386,6 @@ SIMPLE_MARKET_RULES = (
 )
 
 def generate_match_options(match, sport, user_info_text):
-
-
-def generate_match_options(match, sport, user_info_text):
     prompt = f"""
 {ANTI_HALLUCINATION_RULE}
 {SIMPLE_MARKET_RULES}
