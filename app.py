@@ -2738,15 +2738,16 @@ elif S["step"] == "info_request":
 
         st.markdown("---")
 
-    # Reconstruction du texte global, compatible avec la suite
+        info_parts = []
+
+    for match in matches:
+        mid = match["mid"]
+        info = S["data_info_texts"].get(mid, "").strip()
+        info_parts.append(mid + ": " + info)
+
     S["data_info_text"] = "
 
-".join(
-        f"{match['mid']}:
-"
-        f"{S['data_info_texts'].get(match['mid'], '').strip()}"
-        for match in matches
-    )
+".join(info_parts)
 
     missing = missing_information(
         S["data_info_text"], matches
