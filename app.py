@@ -1367,6 +1367,26 @@ def normalize_confidence(value):
         return "Moyen"
     return "Faible"
 
+# ============================================================
+# RÈGLES GÉMINI — ANTI-HALLUCINATION ET MARCHÉS SIMPLES
+# ============================================================
+ANTI_HALLUCINATION_RULE = (
+    "Tu es un assistant d’analyse sportive. "
+    "Utilise uniquement les informations fournies. "
+    "N’invente aucune statistique, cote, blessure, composition "
+    "ou résultat. Si une information est absente, indique-le "
+    "clairement au lieu de la deviner."
+)
+
+SIMPLE_MARKET_RULES = (
+    "Propose uniquement des options simples et compréhensibles : "
+    "victoire, nul, défaite, double chance, plus ou moins de buts, "
+    "les deux équipes marquent, ou marchés similaires. "
+    "Chaque option doit être directement liée aux informations fournies."
+)
+
+def generate_match_options(match, sport, user_info_text):
+
 
 def generate_match_options(match, sport, user_info_text):
     prompt = f"""
