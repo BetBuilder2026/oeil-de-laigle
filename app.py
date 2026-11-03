@@ -2823,13 +2823,6 @@ elif S["step"] == "info_request":
 
     record_progress()
 
-
-# ============================================================
-# AFFICHAGE DE L’ÉTAPE 4 — OPTIONS ET COTES
-# ============================================================
-elif S["step"] == "options_ready":
-    render_options_step()
-
         
 # ============================================================
 # ÉTAPE 4 — OPTIONS ET COTES
@@ -3133,6 +3126,12 @@ def render_options_step():
     ):
         S["stage"] = "final"
         st.rerun()
+
+# ============================================================
+# AFFICHAGE DE L’ÉTAPE 4 — OPTIONS ET COTES
+# ============================================================
+elif S["step"] == "options_ready":
+    render_options_step()
 
 
 # ============================================================
